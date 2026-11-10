@@ -1,0 +1,141 @@
+name: koravto-crm
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+x-app-env: &app-env
+  PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL is required}
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+  MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:?MASTER_ENCRYPTION_KEY is required}
+  FILES_BACKEND: ${FILES_BACKEND:-local}
+  S3_BUCKET: ${S3_BUCKET:-}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  S3_REGION: ${S3_REGION:-us-east-2}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+  TZ: ${TZ:-Asia/Seoul}
+
+services:
+  caddy:
+    <<: *common
+    image: caddy:2-alpine
+    mem_limit: 96m
+    ports: ["80:80/tcp", "443:443/tcp"]
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL}
+      TZ: ${TZ:-Asia/Seoul}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../data/caddy:/data
+      - ../data/caddy-config:/config
+      - ../data/logs/caddy:/var/log/caddy
+    depends_on: [api, web]
+    networks: [frontend]
+  api:
+    <<: *common
+    image: koravto-crm-api:${CRM_RELEASE:-current}
+    build: ../backend
+    mem_limit: 256m
+    environment: *app-env
+    volumes:
+      - ../data/files:/data/files
+      - ../data/logs/app:/var/log/crm
+      - ../data/bootstrap:/run/bootstrap
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=8)"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    networks: [frontend, backend]
+  worker:
+    <<: *common
+    image: koravto-crm-api:${CRM_RELEASE:-current}
+    build: ../backend
+    mem_limit: 256m
+    command: ["sh", "-c", "python -m app.wait_schema && exec arq app.workers.worker.WorkerSettings"]
+    environment: *app-env
+    volumes:
+      - ../data/files:/data/files
+      - ../data/logs/app:/var/log/crm
+    depends_on:
+      api: {condition: service_started}
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
+  web:
+    <<: *common
+    image: koravto-crm-web:${CRM_RELEASE:-current}
+    build: ../frontend
+    mem_limit: 64m
+    networks: [frontend]
+  postgres:
+    <<: *common
+    image: pgvector/pgvector:pg16
+    mem_limit: 256m
+    shm_size: 64m
+    environment:
+      POSTGRES_DB: crm
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: ${TZ:-Asia/Seoul}
+    secrets: [postgres_password]
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=35", "-c", "work_mem=2MB"]
+    volumes: ["../data/postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d crm"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+  redis:
+    <<: *common
+    image: redis:7.4-alpine
+    mem_limit: 96m
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "48mb", "--maxmemory-policy", "noeviction"]
+    volumes: ["../data/redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [backend]
+  backup:
+    <<: *common
+    image: koravto-crm-backup:${CRM_RELEASE:-current}
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    mem_limit: 160m
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      TZ: ${TZ:-Asia/Seoul}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_REGION: ${S3_REGION:-us-east-2}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ../backups:/backups
+      - ../data/files:/files:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [backend]
+
+secrets:
+  postgres_password:
+    file: ../data/secrets/postgres-password
+
+networks:
+  frontend:
+  backend:

@@ -1,5 +1,8 @@
 .env
 .env.*
+!.env.example
+**/.env.example
+!.env.example
 !deploy/.env.example
 .venv/
 __pycache__/
@@ -16,4 +19,7 @@ backups/
 *.pem
 *.key
 bootstrap-admin*
+test-results/
+playwright-report/
+.coverage
 *.tsbuildinfo

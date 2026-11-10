@@ -1,0 +1,231 @@
+# Развёртывание и обслуживание KORAVTO CRM
+
+Все команды выполняются на сервере через Gateway. Рабочая копия — `/opt/crm`,
+Compose — `/opt/crm/deploy/docker-compose.yml`, окружение — `/opt/crm/deploy/.env`.
+Используйте root или sudo. Не включайте `set -x`, не выводите `.env`, `docker inspect`
+или развёрнутый `docker compose config`: там могут быть секреты.
+
+## Первый запуск
+
+1. Подготовить Ubuntu, Docker Engine и Compose plugin, git, openssl, ufw,
+   unattended-upgrades. ZeroTier работает на хосте. Проверить DNS A/AAAA, AWS Security Group
+   и firewall. Публичные входящие: 80/tcp, 443/tcp, 9993/udp; 22/tcp — только доверенные
+   адреса управления Gateway/заказчика. Сервис Mobis 8080 доступен только через ZeroTier.
+2. Клонировать репозиторий в **новую** директорию:
+
+```sh
+git clone --branch main https://github.com/vasilevsergeya/erp_koravto.git /opt/crm
+cd /opt/crm
+python3 deploy/scripts/init-env.py
+cd deploy
+docker compose config --quiet
+docker compose build api web backup
+docker compose up -d
+docker compose ps
+```
+
+`init-env.py` создаёт каталоги данных, `.env` (600), отдельный пароль PostgreSQL (600).
+Все секреты генерируются `openssl rand`; повторный запуск отказывается заменять `.env`.
+В `.env` только инфраструктура. Ключи Wazzup, OpenAI, 1С и SMTP вводятся в интерфейсе.
+Не удаляйте `MASTER_ENCRYPTION_KEY`: без него секреты и TOTP из восстановленной БД не расшифровать.
+Сохраните `.env` отдельно в защищённом хранилище администратора. Пароль PostgreSQL
+в `data/secrets/postgres-password` должен соответствовать паролю в `DATABASE_URL`.
+
+API применяет Alembic под advisory lock до запуска HTTP. Воркеры ждут миграции; они
+не зависят от `api: healthy`, иначе `/health`, учитывающий воркер, создавал бы цикл запуска.
+Убедиться в ответе `200`:
+
+```sh
+curl --fail --silent --show-error https://erp.korean.parts/health
+docker compose exec -T api python -m app.cli create-admin --email admin@example.com --password-file /run/bootstrap/admin.txt
+docker compose exec -T api python -m app.cli seed-boards
+sh scripts/tag-release.sh
+```
+
+Пароль сохранится в `/opt/crm/data/bootstrap/admin.txt`, режим 600. Передайте его владельцу
+однократно по защищённому каналу; после смены пароля удалите файл. В журнал он не выводится.
+
+## Первый вход администратора
+
+1. Открыть https://erp.korean.parts и ввести email и временный пароль.
+2. Придумать новый пароль (не менее 12 символов).
+3. Отсканировать QR-код приложением-аутентификатором, ввести шестизначный TOTP-код.
+4. Открыть «Настройки» → «WhatsApp / Wazzup», сохранить ключ, нажать «Проверить подключение».
+5. Нажать «Подписать вебхуки». Если Wazzup уже связан с другой CRM, система отдельно
+   спросит о замене подписки: после замены предыдущая CRM перестанет получать вебхуки.
+6. Убедиться в активной подписке и времени тестового вебхука. Отправить сообщение с
+   другого телефона на подключённый WhatsApp и проверить раздел «Диалоги».
+
+На этом этапе Inbox принимает сообщения; исходящие сообщения, полноценные задачи,
+AI и живые вызовы 1С/SMTP не реализованы. Предустановленные доски доступны для просмотра.
+Ключи будущих интеграций можно сохранить, но это не запускает интеграции.
+
+## Проверки
+
+```sh
+cd /opt/crm/deploy
+docker compose ps
+curl --fail --silent --show-error https://erp.korean.parts/health
+docker compose exec -T api python -m app.selftest
+docker compose exec -T backup sh /scripts/backup.sh
+```
+
+`selftest` создаёт отдельную базу `crm_verify_*`, применяет миграции, запускает тестовый
+воркер, проверяет пароль/TOTP/CSRF, настройки, идемпотентность и приём сообщений.
+Тестовая БД удаляется в `finally`. Redis DB 15 зарезервирована для этих тестов;
+рабочее приложение использует DB 0. Не запускайте два selftest одновременно.
+Данные реального администратора и рабочие сообщения не изменяются.
+
+## Обновление
+
+Перед изменением схемы создайте свежую копию. Сохраните текущие образы, чтобы работал откат:
+
+```sh
+cd /opt/crm/deploy
+docker compose exec -T backup sh /scripts/backup.sh
+sh scripts/tag-release.sh
+git pull --ff-only origin main
+docker compose build api web backup
+docker compose up -d
+curl --fail --silent --show-error https://erp.korean.parts/health
+sh scripts/tag-release.sh
+```
+
+Миграции применяются автоматически. Для несовместимой миграции сначала остановите
+`api` и `worker` и согласуйте окно обслуживания. Перед добавлением новой миграции
+обновите ожидаемый revision в `app/wait_schema.py`. Не удаляйте предыдущие теги образов
+до завершения проверки новой версии. Версии Python/JS библиотек закреплены lock-файлами.
+
+## Откат
+
+Узнать доступные образы и выбрать SHA ранее проверенного релиза:
+
+```sh
+docker image ls --filter reference='koravto-crm-*'
+CRM_RELEASE=PREVIOUS_COMMIT_SHA docker compose up -d --no-build
+curl --fail --silent --show-error https://erp.korean.parts/health
+```
+
+Замените `PREVIOUS_COMMIT_SHA` на сохранённый 12-символьный тег. Чтобы пережить последующие
+сеансы обслуживания, зафиксируйте выбранный тег в документации релиза либо экспортируйте
+`CRM_RELEASE` перед следующей командой Compose. Не запускайте обычное `up` с устаревшим
+`current` после отката. При несовместимой/необратимой миграции сначала восстановите
+дамп до обновления в новую базу и переключите `DATABASE_URL`, затем старые образы.
+
+## Бэкапы
+
+Каждый день в 03:00 Asia/Seoul создаётся `/opt/crm/backups/crm-YYYYMMDD-HHMMSS/`:
+
+- `database.dump`: PostgreSQL custom dump;
+- `attachments.tar.gz`: локальные неизменяемые файлы вложений;
+- `manifest.json`: время, имя базы, SHA-256 файлов (секреты окружения не включены).
+
+Хранятся 30 дней, удаляются только завершённые копии заданного формата. Запись атомарная,
+параллельный запуск блокируется. При ошибке есть две повторные попытки. Последний успех —
+`backups/status.json`, ошибки — `docker compose logs --tail 50 backup`. Файл `.env`, мастер-ключ
+и исходники не входят в дамп. Локальный бэкап не защищает от потери диска/инстанса.
+
+S3 выключен. Если позже задан `BACKUP_S3_BUCKET` и параметры доступа S3, завершённые копии
+также выгружаются туда; срок хранения S3 настраивается lifecycle-правилом бакета отдельно.
+
+## Проверенное восстановление на пустую базу
+
+`restore.sh` проверяет SHA-256 и создаёт новую базу. Он **никогда не удаляет существующую**.
+Имя новой базы обязано начинаться с `crm_restore_`.
+
+```sh
+cd /opt/crm/deploy
+docker compose exec -T backup sh /scripts/restore.sh /backups/crm-YYYYMMDD-HHMMSS --database crm_restore_check
+docker compose exec -T postgres psql -U crm -d crm_restore_check -c 'SELECT version_num FROM alembic_version;'
+docker compose exec -T postgres psql -U crm -d crm_restore_check -c 'SELECT count(*) FROM users;'
+```
+
+После проверки ненужную **тестовую** базу можно удалить точной командой:
+
+```sh
+docker compose exec -T postgres dropdb -U crm crm_restore_check
+```
+
+Для рабочего восстановления:
+
+1. Остановить `api worker backup`. Сохранить текущую `.env` отдельно (600), не менять
+   `MASTER_ENCRYPTION_KEY` и `SECRET_KEY` на новые.
+2. Запустить PostgreSQL и Redis. Восстановить выбранный дамп в `crm_restore_recovery`:
+
+```sh
+docker compose stop api worker backup
+docker compose run --rm --no-deps backup sh /scripts/restore.sh /backups/crm-YYYYMMDD-HHMMSS --database crm_restore_recovery
+```
+
+3. Если потеряны вложения, распаковать архив на хосте в **пустой временный каталог**,
+   проверить файлы, назначить владельца UID/GID 10001 и заменить каталог `data/files`
+   при остановленных приложениях. Существующие вложения предварительно сохранить:
+
+```sh
+mkdir -m 700 /opt/crm/data/files-restored
+tar --no-same-owner -xzf /opt/crm/backups/crm-YYYYMMDD-HHMMSS/attachments.tar.gz -C /opt/crm/data/files-restored
+chown -R 10001:10001 /opt/crm/data/files-restored
+mv /opt/crm/data/files /opt/crm/data/files-before-restore
+mv /opt/crm/data/files-restored /opt/crm/data/files
+```
+
+4. В редакторе заменить только имя базы в `DATABASE_URL` на `crm_restore_recovery`.
+   Пароль, пользователя и мастер-ключ сохранить. Проверить `.env` имеет права 600.
+5. Запустить требуемый релиз, проверить health, вход, TOTP, настройки, диалоги и вложения:
+
+```sh
+CRM_RELEASE=RESTORED_RELEASE_SHA docker compose up -d --no-build --force-recreate api worker backup
+curl --fail --silent --show-error https://erp.korean.parts/health
+```
+
+Старая база остаётся доступной для диагностики. На новом сервере восстановите защищённую
+`.env` и пароль PostgreSQL до запуска, используйте тот же мастер-ключ, клонируйте нужный
+релиз, затем выполните процедуру выше. Наличие одного дампа без мастер-ключа недостаточно.
+
+## Переменные окружения и отдельный сервис
+
+1. Добавить инфраструктурную переменную в `.env.example` с безопасным примером и в
+   `environment` нужного сервиса Compose. Реальное значение — только в `.env`.
+2. Проверить конфигурацию без вывода секретов, пересоздать нужный сервис:
+
+```sh
+docker compose config --quiet
+docker compose up -d --no-deps --force-recreate api
+```
+
+Простой `restart` не подхватывает изменившееся окружение. Если параметр используется
+также воркером, пересоздать и его. Ключи интеграций меняются в интерфейсе без перезапуска;
+кэш сбрасывается с использованием версии в Redis и pub/sub.
+
+## Файлы и S3
+
+По умолчанию `FILES_BACKEND=local`, том `data/files`, доступ по подписанным ссылкам на
+10 минут. Для новых файлов можно переключить `FILES_BACKEND=s3`, задать `S3_BUCKET`,
+регион, endpoint при необходимости и учётные данные, пересоздать `api worker`.
+Старые вложения сохраняют свой backend и остаются в старом хранилище; автоматического
+переноса нет. Объекты S3 требуют собственного versioning/lifecycle/backup — локальный
+архив содержит только локальный том. В текущем развёртывании S3 не используется.
+
+## Восстановление доступа администратора
+
+Только через доверенный Gateway с правами администратора сервера:
+
+```sh
+docker compose exec -T api python -m app.cli reset-admin --email admin@example.com --password-file /run/bootstrap/admin-recovery.txt
+```
+
+Сбрасываются сессии, пароль и TOTP; при следующем входе обязательна повторная настройка.
+Файл назначения должен быть новым. После передачи пароля и настройки удалить его.
+
+## Журналы и ресурсы
+
+Docker: `json-file`, 50 МБ × 5 для всех сервисов. Прикладные JSON-логи с correlation ID —
+`data/logs/app`, ежедневная ротация с 14 архивами. Caddy отбрасывает URI и HTTP-заголовки
+из access/runtime логов, чтобы не записывать токен вебхука, cookie или Authorization.
+Пользовательские тексты, пароли и ключи не записываются в прикладные логи.
+
+Исходный сервер t3.micro имеет около 1 ГБ RAM и одновременно выполняет парсер Mobis.
+Для первого запуска добавлен swap 2 ГБ и ограничения памяти контейнеров. Это не проверка
+производительности полноценной CRM: перед работой всей команды нужен запас памяти и
+нагрузочная проверка. Автоматические обновления ОС включены; автоматическая перезагрузка
+отключена, чтобы не прерывать парсер. Требуемую перезагрузку планировать отдельно.
