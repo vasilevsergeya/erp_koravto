@@ -66,10 +66,11 @@ AI и живые вызовы 1С/SMTP не реализованы. Предус
 cd /opt/crm/deploy
 docker compose ps
 curl --fail --silent --show-error https://erp.korean.parts/health
-docker compose exec -T api python -m app.selftest
+docker run --rm --memory 512m --memory-swap 1g --network koravto-crm_backend --env-file .env koravto-crm-api:current python -m app.selftest
 docker compose exec -T backup sh /scripts/backup.sh
 ```
 
+Проверка выполняется в отдельном контейнере с лимитом 512 МБ и не делит лимит памяти рабочего API.
 `selftest` создаёт отдельную базу `crm_verify_*`, применяет миграции, запускает тестовый
 воркер, проверяет пароль/TOTP/CSRF, настройки, идемпотентность и приём сообщений.
 Тестовая БД удаляется в `finally`. Redis DB 15 зарезервирована для этих тестов;

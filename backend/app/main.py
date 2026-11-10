@@ -54,7 +54,12 @@ async def protect_and_log(request: Request, call_next):
     try:
         if request.method not in ("GET", "HEAD", "OPTIONS") and not is_webhook:
             if request.headers.get("origin", "") != config().public_url:
-                return JSONResponse({"detail": "Недопустимый источник запроса"}, status_code=403)
+                status = 403
+                return JSONResponse(
+                    {"detail": "Недопустимый источник запроса"},
+                    status_code=status,
+                    headers={"X-Request-ID": correlation, "Cache-Control": "no-store"},
+                )
         if is_webhook:
             ip = request.client.host if request.client else "unknown"
             tick = int(time.monotonic()) // 60
@@ -65,7 +70,12 @@ async def protect_and_log(request: Request, call_next):
             while len(_buckets) > 10000:
                 _buckets.popitem(last=False)
             if count > 1800:
-                return JSONResponse({"detail": "Rate limit"}, status_code=429)
+                status = 429
+                return JSONResponse(
+                    {"detail": "Rate limit"},
+                    status_code=status,
+                    headers={"X-Request-ID": correlation, "Cache-Control": "no-store"},
+                )
         response = await call_next(request)
         status = response.status_code
     except Exception as error:
