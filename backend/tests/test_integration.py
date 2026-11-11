@@ -3,20 +3,21 @@ import secrets
 import subprocess
 import time
 import unittest
+from datetime import timedelta
 from unittest.mock import patch
 
-import pyotp
 from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import func, select
 
+from app.api.auth import COOKIE
 from app.cli import seed_boards
 from app.core.config import config
 from app.core.db import SessionLocal
-from app.core.security import hash_password
+from app.core.security import hash_password, token_hash
 from app.core.settings import direct_secret, redis_client
-from app.main import app
-from app.models import Board, Message, Setting, User, WebhookEvent
+from app.main import app, websocket_authorized
+from app.models import Board, LoginSession, Message, Setting, User, WebhookEvent, now
 
 
 @unittest.skipUnless(os.getenv("CRM_INTEGRATION_TEST") == "1", "Requires an isolated test database")
@@ -45,16 +46,11 @@ class IntegrationTests(unittest.TestCase):
         assert response.status_code == 200, response.status_code
         cls.client.headers["X-CSRF-Token"] = response.json()["csrf_token"]
         assert cls.client.get("/api/settings").status_code == 403
-        assert (
-            cls.client.post(
-                "/api/auth/password", json={"password": secrets.token_urlsafe(24)}
-            ).status_code
-            == 200
-        )
-        enrollment = cls.client.post("/api/auth/totp/setup").json()
-        cls.totp = enrollment["secret"]
-        code = pyotp.TOTP(cls.totp).now()
-        assert cls.client.post("/api/auth/totp/verify", json={"code": code}).status_code == 200
+        cls.password = secrets.token_urlsafe(24)
+        response = cls.client.post("/api/auth/password", json={"password": cls.password})
+        assert response.status_code == 200
+        assert not response.json()["must_change_password"]
+        assert cls.client.get("/api/settings").status_code == 200
         for _ in range(30):
             if cls.client.get("/health").status_code == 200:
                 break
@@ -66,6 +62,61 @@ class IntegrationTests(unittest.TestCase):
         cls.worker.terminate()
         cls.worker.wait(timeout=15)
         redis_client.flushdb()  # Dedicated Redis database 15, asserted by selftest runner.
+
+    def test_password_login_and_logout_without_second_factor(self):
+        with TestClient(
+            app, base_url=config().public_url, headers={"Origin": config().public_url}
+        ) as client:
+            bad = client.post(
+                "/api/auth/login",
+                json={"email": "acceptance@example.invalid", "password": "incorrect"},
+            )
+            self.assertEqual(bad.status_code, 401)
+            response = client.post(
+                "/api/auth/login",
+                json={"email": "acceptance@example.invalid", "password": self.password},
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("totp_enabled", response.json())
+            client.headers["X-CSRF-Token"] = response.json()["csrf_token"]
+            self.assertEqual(client.get("/api/settings").status_code, 200)
+            raw = client.cookies.get(COOKIE)
+            self.assertTrue(websocket_authorized(raw))
+            with SessionLocal() as db:
+                session = db.get(LoginSession, token_hash(raw))
+                self.assertGreater(session.expires_at, now() + timedelta(hours=7))
+            self.assertEqual(client.post("/api/auth/logout").status_code, 200)
+            self.assertFalse(websocket_authorized(raw))
+            self.assertEqual(client.get("/api/settings").status_code, 401)
+
+    def test_existing_enrollment_session_can_enter_without_totp(self):
+        raw = secrets.token_urlsafe(48)
+        with SessionLocal() as db:
+            user = db.scalar(select(User).where(User.email == "acceptance@example.invalid"))
+            db.add(
+                LoginSession(
+                    token_hash=token_hash(raw),
+                    user_id=user.id,
+                    csrf_token=secrets.token_hex(32),
+                    second_factor_verified=False,
+                    pending_totp_secret="legacy-unused-secret",
+                    expires_at=now() + timedelta(minutes=10),
+                )
+            )
+            db.commit()
+        with TestClient(
+            app, base_url=config().public_url, headers={"Origin": config().public_url}
+        ) as client:
+            client.cookies.set(COOKIE, raw)
+            self.assertEqual(client.get("/api/settings").status_code, 200)
+            self.assertTrue(websocket_authorized(raw))
+            self.assertEqual(client.post("/api/auth/totp/setup").status_code, 404)
+            self.assertEqual(
+                client.post("/api/auth/totp/verify", json={"code": "123456"}).status_code, 404
+            )
+        with SessionLocal() as db:
+            db.delete(db.get(LoginSession, token_hash(raw)))
+            db.commit()
 
     def test_health_reports_database_redis_and_worker(self):
         response = self.client.get("/health")

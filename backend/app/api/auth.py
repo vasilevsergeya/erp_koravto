@@ -2,7 +2,6 @@ import secrets
 from datetime import timedelta
 from typing import cast
 
-import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from redis import RedisError
@@ -11,12 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import (
-    decrypt,
-    encrypt,
     hash_password,
     token_hash,
     verify_password,
-    verify_totp,
 )
 from app.core.settings import redis_client
 from app.models import AuditEvent, LoginSession, User, now
@@ -53,12 +49,8 @@ def auth_session(request: Request, db: Session = Depends(get_db)) -> tuple[Login
 
 
 def current_user(auth=Depends(auth_session)) -> User:
-    session, user = auth
-    if (
-        user.must_change_password
-        or not session.second_factor_verified
-        or (user.role == "admin" and not user.totp_enabled)
-    ):
+    _, user = auth
+    if user.must_change_password:
         raise HTTPException(403, "Завершите настройку безопасности")
     return user
 
@@ -75,8 +67,6 @@ def describe(session, user):
         "role": user.role,
         "csrf_token": session.csrf_token,
         "must_change_password": user.must_change_password,
-        "totp_enabled": user.totp_enabled,
-        "totp_verified": session.second_factor_verified,
     }
 
 
@@ -87,10 +77,6 @@ class LoginInput(BaseModel):
 
 class PasswordInput(BaseModel):
     password: str = Field(min_length=12, max_length=256)
-
-
-class TOTPInput(BaseModel):
-    code: str = Field(min_length=6, max_length=6)
 
 
 @router.post("/login")
@@ -109,17 +95,15 @@ def login(body: LoginInput, request: Request, response: Response, db: Session = 
             user.failed_logins = 0
         db.commit()
         raise HTTPException(401, "Неверный email или пароль")
-    # Successful password does not reset failed TOTP attempts for an enrolled admin.
-    if not user.totp_enabled:
-        user.failed_logins = 0
-        user.locked_until = None
+    user.failed_logins = 0
+    user.locked_until = None
     raw = secrets.token_urlsafe(48)
     session = LoginSession(
         token_hash=token_hash(raw),
         user_id=user.id,
         csrf_token=secrets.token_hex(32),
-        expires_at=now() + timedelta(minutes=15),
-        second_factor_verified=False,
+        expires_at=now()
+        + (timedelta(minutes=15) if user.must_change_password else timedelta(hours=8)),
     )
     db.add(session)
     db.add(AuditEvent(user_id=user.id, action="auth.password_verified", target="session"))
@@ -138,82 +122,17 @@ def me(auth=Depends(auth_session)):
 @router.post("/password")
 def change_password(body: PasswordInput, auth=Depends(auth_session), db: Session = Depends(get_db)):
     session, user = auth
-    if not user.must_change_password and not session.second_factor_verified:
-        raise HTTPException(403, "Подтвердите второй фактор")
     if verify_password(body.password, user.password_hash):
         raise HTTPException(400, "Новый пароль должен отличаться от временного")
     user.password_hash = hash_password(body.password)
     user.must_change_password = False
+    session.expires_at = now() + timedelta(hours=8)
     db.execute(
         delete(LoginSession).where(
             LoginSession.user_id == user.id, LoginSession.token_hash != session.token_hash
         )
     )
     db.add(AuditEvent(user_id=user.id, action="auth.password_changed", target="user"))
-    db.commit()
-    return describe(session, user)
-
-
-@router.post("/totp/setup")
-def setup_totp(auth=Depends(auth_session), db: Session = Depends(get_db)):
-    session, user = auth
-    session = db.scalar(
-        select(LoginSession).where(LoginSession.token_hash == session.token_hash).with_for_update()
-    )
-    if session is None:
-        raise HTTPException(401, "Войдите в систему")
-    if user.must_change_password:
-        raise HTTPException(403, "Сначала смените временный пароль")
-    if user.totp_enabled:
-        raise HTTPException(409, "Второй фактор уже настроен")
-    if not session.pending_totp_secret:
-        session.pending_totp_secret = encrypt(
-            pyotp.random_base32(), "totp-pending:" + session.token_hash
-        )
-        db.commit()
-    secret = decrypt(session.pending_totp_secret, "totp-pending:" + session.token_hash)
-    return {
-        "secret": secret,
-        "uri": pyotp.TOTP(secret).provisioning_uri(user.email, issuer_name="KORAVTO CRM"),
-    }
-
-
-@router.post("/totp/verify")
-def check_totp(body: TOTPInput, auth=Depends(auth_session), db: Session = Depends(get_db)):
-    session, existing = auth
-    rate_limit("totp:" + existing.id, 20, 900)
-    user = db.scalar(select(User).where(User.id == existing.id).with_for_update())
-    if user is None:
-        raise HTTPException(401, "Войдите в систему")
-    if user.must_change_password:
-        raise HTTPException(403, "Сначала смените временный пароль")
-    if user.locked_until and user.locked_until > now():
-        raise HTTPException(429, "Вход временно заблокирован")
-    if user.totp_enabled:
-        if not user.totp_secret:
-            raise HTTPException(403, "Обратитесь к администратору для восстановления доступа")
-        secret = decrypt(user.totp_secret, "totp:" + user.id)
-    elif session.pending_totp_secret:
-        secret = decrypt(session.pending_totp_secret, "totp-pending:" + session.token_hash)
-    else:
-        raise HTTPException(400, "Начните настройку второго фактора")
-    counter = verify_totp(secret, body.code, user.totp_counter)
-    if counter is None:
-        user.failed_logins += 1
-        if user.failed_logins >= 10:
-            user.locked_until = now() + timedelta(minutes=15)
-            user.failed_logins = 0
-        db.commit()
-        raise HTTPException(400, "Неверный или уже использованный код")
-    user.totp_secret = encrypt(secret, "totp:" + user.id)
-    user.totp_enabled = True
-    user.totp_counter = counter
-    user.failed_logins = 0
-    user.locked_until = None
-    session.pending_totp_secret = None
-    session.second_factor_verified = True
-    session.expires_at = now() + timedelta(hours=8)
-    db.add(AuditEvent(user_id=user.id, action="auth.totp_verified", target="session"))
     db.commit()
     return describe(session, user)
 

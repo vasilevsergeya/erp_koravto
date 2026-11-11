@@ -4,7 +4,6 @@ import {QueryClient, QueryClientProvider, useQuery, useQueryClient} from '@tanst
 import {MantineProvider, TextInput, PasswordInput, Button, Alert, Badge, Loader, Select} from '@mantine/core';
 import {useTranslation} from 'react-i18next';
 import {MessageSquare, LayoutDashboard, Settings, LogOut, ArrowRight, ArrowLeft, ShieldCheck, ChevronRight, Link2, Inbox as InboxIcon, CheckCircle2, KeyRound} from 'lucide-react';
-import QRCode from 'qrcode';
 import '@mantine/core/styles.css';
 import './i18n';
 import './style.css';
@@ -18,25 +17,19 @@ function Brand(){return <div className="brand"><span className="brand-icon">K<sp
 
 function Auth({user,onUser}:{user:User|null;onUser:(user:User)=>void}){
   const {t}=useTranslation();const[email,emailSet]=useState('');const[password,passwordSet]=useState('');
-  const[code,codeSet]=useState('');const[error,errorSet]=useState('');const[busy,busySet]=useState(false);
-  const[enrollment,enrollmentSet]=useState<{secret:string;uri:string}|null>(null);const[qr,qrSet]=useState('');
-  const passwordStep=!!user?.must_change_password;const setupStep=!!user&&!passwordStep&&!user.totp_enabled;
-  useEffect(()=>{if(setupStep&&!enrollment){api<{secret:string;uri:string}>('/api/auth/totp/setup','POST').then(enrollmentSet).catch(e=>errorSet(errText(e)));}},[setupStep,enrollment]);
-  useEffect(()=>{if(enrollment)void QRCode.toDataURL(enrollment.uri,{width:210,margin:1}).then(qrSet);},[enrollment]);
+  const[error,errorSet]=useState('');const[busy,busySet]=useState(false);
+  const passwordStep=!!user?.must_change_password;
   async function submit(event:React.FormEvent){event.preventDefault();errorSet('');busySet(true);try{
-    const path=!user?'/api/auth/login':passwordStep?'/api/auth/password':'/api/auth/totp/verify';
-    const body=!user?{email,password}:passwordStep?{password}:{code};
-    const next=await api<User>(path,'POST',body);setCsrf(next.csrf_token);passwordSet('');codeSet('');onUser(next);
+    const path=!user?'/api/auth/login':'/api/auth/password';
+    const body=!user?{email,password}:{password};
+    const next=await api<User>(path,'POST',body);setCsrf(next.csrf_token);passwordSet('');onUser(next);
   }catch(e){errorSet(errText(e));}finally{busySet(false);}}
-  const title=!user?t('signIn'):passwordStep?t('passwordTitle'):setupStep?t('totpTitle'):t('totpCodeTitle');
-  const hint=!user?t('signInHint'):passwordStep?t('passwordHint'):setupStep?t('totpHint'):t('totpCodeHint');
-  return <div className="auth-layout"><aside className="auth-story"><Brand/><div className="story-center"><div className="eyebrow">KOREAN PARTS · TEAM</div><h1>Ближе к клиентам.<br/><span>Вместе в работе.</span></h1><p>Единое пространство для общения<br/>и ежедневных задач команды.</p><div className="story-graphic"><div className="graphic-line"/><div className="graphic-card"><MessageSquare size={22}/><span>Разговор начинается<br/><b>с внимания</b></span><span className="graphic-dot"/></div><div className="graphic-small"><CheckCircle2 size={18}/> На связи с командой</div></div></div><div className="story-foot">KORAVTO / 2026</div></aside><main className="auth-main"><div className="mobile-brand"><Brand/></div><div className="auth-card"><div className="auth-symbol">{user?<ShieldCheck/>:<KeyRound/>}</div><div className="eyebrow dark">{t(user?'security':'authTag')}</div><h2>{title}</h2><p className="muted">{hint}</p>{user&&<div className="steps"><span className={!passwordStep?'done':''}>01 {t('step1')}</span><span className={!passwordStep?'active':''}>02 {t('step2')}</span></div>}
+  const title=!user?t('signIn'):t('passwordTitle');
+  const hint=!user?t('signInHint'):t('passwordHint');
+  return <div className="auth-layout"><aside className="auth-story"><Brand/><div className="story-center"><div className="eyebrow">KOREAN PARTS · TEAM</div><h1>Ближе к клиентам.<br/><span>Вместе в работе.</span></h1><p>Единое пространство для общения<br/>и ежедневных задач команды.</p><div className="story-graphic"><div className="graphic-line"/><div className="graphic-card"><MessageSquare size={22}/><span>Разговор начинается<br/><b>с внимания</b></span><span className="graphic-dot"/></div><div className="graphic-small"><CheckCircle2 size={18}/> На связи с командой</div></div></div><div className="story-foot">KORAVTO / 2026</div></aside><main className="auth-main"><div className="mobile-brand"><Brand/></div><div className="auth-card"><div className="auth-symbol">{user?<ShieldCheck/>:<KeyRound/>}</div><div className="eyebrow dark">{t(user?'security':'authTag')}</div><h2>{title}</h2><p className="muted">{hint}</p>
     {error&&<Alert color="red" mb="md" role="alert">{error}</Alert>}<form onSubmit={submit}>
     {!user&&<TextInput label={t('email')} type="email" autoComplete="username" value={email} onChange={e=>emailSet(e.currentTarget.value)} required size="md" mb="md"/>}
-    {(!user||passwordStep)?<PasswordInput label={t(passwordStep?'newPassword':'password')} autoComplete={passwordStep?'new-password':'current-password'} value={password} minLength={passwordStep?12:1} onChange={e=>passwordSet(e.currentTarget.value)} required size="md" mb="lg"/>:<>
-      {setupStep&&enrollment&&<div className="totp-setup">{qr&&<img src={qr} alt="QR-код настройки TOTP"/>}<details><summary>{t('manualKey')}</summary><code>{enrollment.secret}</code></details></div>}
-      <TextInput label={t('totpCode')} autoComplete="one-time-code" inputMode="numeric" maxLength={6} value={code} onChange={e=>codeSet(e.currentTarget.value.replace(/\D/g,''))} required size="md" mb="lg"/>
-    </>}<Button type="submit" fullWidth size="md" loading={busy} rightSection={<ArrowRight size={17}/>}>{t(!user?'login':passwordStep?'savePassword':'confirm')}</Button></form><div className="security-foot"><ShieldCheck size={14}/>{t('securityFoot')}</div></div></main></div>;
+    <PasswordInput label={t(passwordStep?'newPassword':'password')} autoComplete={passwordStep?'new-password':'current-password'} value={password} minLength={passwordStep?12:1} onChange={e=>passwordSet(e.currentTarget.value)} required size="md" mb="lg"/><Button type="submit" fullWidth size="md" loading={busy} rightSection={<ArrowRight size={17}/>}>{t(!user?'login':'savePassword')}</Button></form><div className="security-foot"><ShieldCheck size={14}/>{t('securityFoot')}</div></div></main></div>;
 }
 
 function Inbox({openSettings}:{openSettings:()=>void}){
@@ -91,8 +84,9 @@ function App(){const[user,userSet]=useState<User|null>(null);const[loading,loadi
   async function logout(){try{await api('/api/auth/logout','POST');}finally{client.clear();userSet(null);setCsrf('');}}
   if(loading)return <div className="loading full"><Loader color="teal"/></div>;
   if(error)return <div className="loading full"><Alert color="red">{error}<Button mt="md" onClick={load}>Повторить</Button></Alert></div>;
-  if(!user||user.must_change_password||!user.totp_enabled||!user.totp_verified)return <Auth user={user} onUser={update}/>;
+  if(!user||user.must_change_password)return <Auth user={user} onUser={update}/>;
   return <Workspace user={user} onLogout={()=>void logout()}/>;
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><MantineProvider theme={{primaryColor:'teal',defaultRadius:'md',fontFamily:'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',headings:{fontFamily:'inherit'}}}><QueryClientProvider client={client}><App/></QueryClientProvider></MantineProvider></React.StrictMode>);
+

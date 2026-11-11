@@ -4,8 +4,7 @@ void i18n.use(initReactI18next).init({lng:'ru', fallbackLng:'ru', interpolation:
   brand:'KORAVTO', workspace:'Рабочее пространство', inbox:'Диалоги', boards:'Доски', settings:'Настройки',
   logout:'Выйти', login:'Войти', email:'Email', password:'Пароль', signIn:'Вход в CRM', signInHint:'Клиенты, сообщения и работа команды — в одном месте.',
   authTag:'ДОСТУП ДЛЯ КОМАНДЫ', security:'Защита аккаунта', passwordTitle:'Создайте постоянный пароль', passwordHint:'Не менее 12 символов. Временный пароль после смены перестанет действовать.',
-  newPassword:'Новый пароль', savePassword:'Сохранить пароль', totpTitle:'Подключите приложение-аутентификатор', totpHint:'Отсканируйте QR-код в Google Authenticator, 1Password или другом приложении. Затем введите шестизначный код.',
-  totpCodeTitle:'Подтвердите вход', totpCodeHint:'Введите код из вашего приложения-аутентификатора.', totpCode:'Код из приложения', confirm:'Подтвердить', manualKey:'Ключ для ручного ввода',
+  newPassword:'Новый пароль', savePassword:'Сохранить пароль',
   loading:'Загрузка…', connected:'Система работает', degraded:'Есть неполадки', checking:'Проверяем соединение', version:'CRM / ПЕРВЫЙ ЭТАП',
   inboxHint:'Входящие сообщения вашей команды', noDialogs:'Пока нет диалогов', noDialogsHint:'Подключите Wazzup в настройках. Новые сообщения появятся здесь автоматически.',
   openSettings:'Открыть настройки', chooseDialog:'Выберите диалог', chooseDialogHint:'Здесь появится переписка с клиентом.', incoming:'Клиент', phoneAuthor:'С телефона',
@@ -24,6 +23,7 @@ void i18n.use(initReactI18next).init({lng:'ru', fallbackLng:'ru', interpolation:
   'onec.base_url':'Адрес 1С в ZeroTier', 'onec.api_key':'Ключ API 1С', 'smtp.host':'Сервер SMTP', 'smtp.port':'Порт SMTP',
   'smtp.username':'Логин SMTP', 'smtp.password':'Пароль SMTP', 'smtp.from_email':'Email отправителя',
   networkError:'Не удалось связаться с сервером', loadError:'Не удалось загрузить данные', retry:'Повторить',
-  step1:'Пароль', step2:'Второй фактор', more:'Загрузить ещё', securityFoot:'Защищённое соединение · двухфакторный вход'
+  more:'Загрузить ещё', securityFoot:'Защищённое соединение · вход по email и паролю'
 }}}});
 export default i18n;
+

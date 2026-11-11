@@ -3,7 +3,7 @@
 Python 3.12 / FastAPI, PostgreSQL 16 + pgvector, Redis + arq, React 18 / TypeScript.
 Deployment: <https://erp.korean.parts>. Operational instructions: [deploy/README.md](deploy/README.md).
 
-This first stage includes administrator bootstrap, forced password change, mandatory TOTP,
+This first stage includes administrator bootstrap, forced password change, password-only login,
 encrypted integration settings, read-only seeded boards, durable Wazzup inbound messages,
 attachments, WebSocket notifications, HTTPS and verified database backups.
 
@@ -26,3 +26,7 @@ The repository is public; runtime data and integration credentials remain on the
 - https://arq-docs.helpmanual.io/
 - https://docs.docker.com/engine/install/ubuntu/
 - https://caddyserver.com/docs/automatic-https
+
+
+On 2026-11-11 the owner requested removal of two-factor authentication. Revision 0002
+clears existing TOTP enrollment secrets; passwords and user roles are preserved.

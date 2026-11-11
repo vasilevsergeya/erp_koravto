@@ -158,15 +158,10 @@ def docs(user=Depends(auth.admin_user)):
 def websocket_authorized(raw: str) -> bool:
     with SessionLocal() as db:
         session = db.get(LoginSession, token_hash(raw)) if raw else None
-        if not session or session.expires_at <= now() or not session.second_factor_verified:
+        if not session or session.expires_at <= now():
             return False
         user = db.get(User, session.user_id)
-        return bool(
-            user
-            and user.active
-            and not user.must_change_password
-            and (user.role != "admin" or user.totp_enabled)
-        )
+        return bool(user and user.active and not user.must_change_password)
 
 
 @app.websocket("/api/ws")
