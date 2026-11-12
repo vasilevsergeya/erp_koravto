@@ -11,7 +11,7 @@ class WazzupAdapter:
     def __init__(self, api_key: str):
         self.api_key = api_key
 
-    async def request(self, method: str, path: str, payload=None):
+    async def request(self, method: str, path: str, payload=None, *, expect_json: bool = True):
         if not self.api_key:
             raise IntegrationError("key_not_configured")
         try:
@@ -26,7 +26,7 @@ class WazzupAdapter:
         if not response.is_success:
             # Provider descriptions may contain credentials or callback URLs; never echo them.
             raise IntegrationError(f"http_{response.status_code}")
-        if not response.content:
+        if not expect_json or not response.content:
             return {}
         try:
             return response.json()
@@ -53,6 +53,8 @@ class WazzupAdapter:
                     "channelsUpdates": True,
                 },
             },
+            # Wazzup may acknowledge PATCH with plain text; callers verify via GET.
+            expect_json=False,
         )
 
     async def check_subscription(self):
