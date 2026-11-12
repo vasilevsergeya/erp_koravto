@@ -41,7 +41,7 @@ def update_setting(
         raise HTTPException(404, "Настройка не найдена")
     kind, secret, _ = SETTING_SCHEMA[key]
     if kind == "integer" and (type(body.value) is not int or not 1 <= body.value <= 65535):
-        raise HTTPException(400, "Укажите порт от 1 до 65535")
+        raise HTTPException(400, "Укажите целое число от 1 до 65535")
     if kind == "string" and (not isinstance(body.value, str) or len(body.value) > 8192):
         raise HTTPException(400, "Некорректное значение")
     put_setting(db, key, body.value, secret, user.id)

@@ -41,6 +41,12 @@
             }
         }
     }
+    handle /api/uploads {
+        request_body {
+            max_size 11MB
+        }
+        reverse_proxy api:8000
+    }
     @api path /api/* /health
     handle @api {
         request_body {
