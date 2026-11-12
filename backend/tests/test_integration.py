@@ -2,6 +2,8 @@ import os
 import secrets
 import subprocess
 import time
+import tempfile
+from pathlib import Path
 import unittest
 from datetime import timedelta
 from unittest.mock import patch
@@ -62,6 +64,55 @@ class IntegrationTests(unittest.TestCase):
         cls.worker.terminate()
         cls.worker.wait(timeout=15)
         redis_client.flushdb()  # Dedicated Redis database 15, asserted by selftest runner.
+
+    def test_created_admin_requires_password_change_with_seven_character_minimum(self):
+        email = "new-admin@example.invalid"
+        with tempfile.TemporaryDirectory() as directory:
+            password_path = Path(directory) / "temporary-password.txt"
+            subprocess.run(
+                [
+                    "python", "-m", "app.cli", "create-admin",
+                    "--email", email, "--password-file", str(password_path),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            temporary_password = password_path.read_text().strip()
+        with TestClient(
+            app, base_url=config().public_url, headers={"Origin": config().public_url}
+        ) as client:
+            response = client.post(
+                "/api/auth/login", json={"email": email, "password": temporary_password}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["role"], "admin")
+            self.assertTrue(response.json()["must_change_password"])
+            client.headers["X-CSRF-Token"] = response.json()["csrf_token"]
+            self.assertEqual(client.get("/api/settings").status_code, 403)
+            self.assertEqual(
+                client.post("/api/auth/password", json={"password": "Abc123"}).status_code,
+                422,
+            )
+            self.assertTrue(client.get("/api/auth/me").json()["must_change_password"])
+            password = secrets.token_hex(4)[:7]
+            response = client.post("/api/auth/password", json={"password": password})
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(response.json()["must_change_password"])
+            self.assertEqual(client.get("/api/settings").status_code, 200)
+            self.assertEqual(client.post("/api/auth/logout").status_code, 200)
+            self.assertEqual(
+                client.post(
+                    "/api/auth/login", json={"email": email, "password": temporary_password}
+                ).status_code,
+                401,
+            )
+            response = client.post(
+                "/api/auth/login", json={"email": email, "password": password}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(response.json()["must_change_password"])
+            client.headers["X-CSRF-Token"] = response.json()["csrf_token"]
+            self.assertEqual(client.post("/api/auth/logout").status_code, 200)
 
     def test_password_login_and_logout_without_second_factor(self):
         with TestClient(

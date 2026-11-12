@@ -76,7 +76,7 @@ class LoginInput(BaseModel):
 
 
 class PasswordInput(BaseModel):
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=7, max_length=256)
 
 
 @router.post("/login")

@@ -3,7 +3,7 @@ import { initReactI18next } from 'react-i18next';
 void i18n.use(initReactI18next).init({lng:'ru', fallbackLng:'ru', interpolation:{escapeValue:false}, resources:{ru:{translation:{
   brand:'KORAVTO', workspace:'Рабочее пространство', inbox:'Диалоги', boards:'Доски', settings:'Настройки',
   logout:'Выйти', login:'Войти', email:'Email', password:'Пароль', signIn:'Вход в CRM', signInHint:'Клиенты, сообщения и работа команды — в одном месте.',
-  authTag:'ДОСТУП ДЛЯ КОМАНДЫ', security:'Защита аккаунта', passwordTitle:'Создайте постоянный пароль', passwordHint:'Не менее 12 символов. Временный пароль после смены перестанет действовать.',
+  authTag:'ДОСТУП ДЛЯ КОМАНДЫ', security:'Защита аккаунта', passwordTitle:'Создайте постоянный пароль', passwordHint:'Не менее 7 символов. Временный пароль после смены перестанет действовать.',
   newPassword:'Новый пароль', savePassword:'Сохранить пароль',
   loading:'Загрузка…', connected:'Система работает', degraded:'Есть неполадки', checking:'Проверяем соединение', version:'CRM / ПЕРВЫЙ ЭТАП',
   inboxHint:'Входящие сообщения вашей команды', noDialogs:'Пока нет диалогов', noDialogsHint:'Подключите Wazzup в настройках. Новые сообщения появятся здесь автоматически.',
