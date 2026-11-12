@@ -101,6 +101,12 @@ class Conversation(Base):
     name: Mapped[str] = mapped_column(String(200), default="")
     phone: Mapped[str] = mapped_column(String(100), default="")
     state: Mapped[str] = mapped_column(String(30), default="waiting_us")
+    assignee_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    needs_human: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_mode: Mapped[str] = mapped_column(String(20), default="default")
+    order_numbers: Mapped[list] = mapped_column(JSONB, default=list)
+    unread_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
@@ -124,6 +130,15 @@ class Message(Base):
     deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     history: Mapped[list] = mapped_column(JSONB, default=list)
     attachment_id: Mapped[str | None] = mapped_column(ForeignKey("attachments.id"))
+    author_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    quoted_message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id"))
+    quoted_text: Mapped[str] = mapped_column(Text, default="")
+    is_private_note: Mapped[bool] = mapped_column(Boolean, default=False)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    send_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    send_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
@@ -134,4 +149,14 @@ class Attachment(Base):
     backend: Mapped[str] = mapped_column(String(10))
     filename: Mapped[str] = mapped_column(String(200))
     size: Mapped[int] = mapped_column(Integer)
+    uploaded_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    mime: Mapped[str] = mapped_column(String(100), default="application/octet-stream")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class DeliveryReceipt(Base):
+    __tablename__ = "delivery_receipts"
+    external_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    status: Mapped[str] = mapped_column(String(40))
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

@@ -2,18 +2,31 @@ import asyncio
 import contextlib
 import json
 import logging
+import mimetypes
+import re
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import phonenumbers
 from arq.connections import RedisSettings
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text, update
 
 from app.core.config import config
 from app.core.db import SessionLocal
 from app.core.logging import configure_logging
+from app.core.settings import get_setting
 from app.integrations.channels.wazzup import WazzupAdapter
-from app.models import Attachment, Conversation, LoginSession, Message, WebhookEvent, now
+from app.models import (
+    Attachment,
+    Conversation,
+    DeliveryReceipt,
+    LoginSession,
+    Message,
+    WebhookEvent,
+    now,
+)
+from app.services.outbox import deliver_message, status_forward
 from app.services.storage import download_attachment, save_file
 
 log = logging.getLogger("crm")
@@ -38,10 +51,13 @@ def message_time(value) -> datetime:
 
 
 def advance_status(old: str, new: str) -> str:
-    levels = {"sent": 1, "delivered": 2, "read": 3}
-    if old in levels and new in levels and levels[new] < levels[old]:
-        return old
-    return new[:40]
+    return status_forward(old, new)
+
+
+def safe_error(item):
+    error = item.get("error") or {}
+    code = error.get("error", "") if isinstance(error, dict) else ""
+    return code if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,99}", code) else None
 
 
 async def process_webhook(ctx, event_id: str):
@@ -57,6 +73,10 @@ async def process_webhook(ctx, event_id: str):
                 return
             messages, statuses = WazzupAdapter.parse_webhook(event.payload)
             for item in messages:
+                db.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": item["channelId"] + ":" + item["chatId"]},
+                )
                 existing = db.scalar(
                     select(Message).where(
                         Message.channel_id == item["channelId"],
@@ -74,14 +94,18 @@ async def process_webhook(ctx, event_id: str):
                         ]
                         existing.body = str(item["text"])[:100000]
                         existing.edited = True
+                    if existing.status == "error":
+                        existing.error_code = safe_error(item)
                     existing.deleted = existing.deleted or bool(item.get("isDeleted"))
                     changed.add(existing.conversation_id)
                     continue
                 conversation = db.scalar(
-                    select(Conversation).where(
+                    select(Conversation)
+                    .where(
                         Conversation.channel_id == item["channelId"],
                         Conversation.chat_id == item["chatId"],
                     )
+                    .with_for_update()
                 )
                 if conversation is None:
                     contact = item.get("contact") or {}
@@ -113,12 +137,38 @@ async def process_webhook(ctx, event_id: str):
                 if content_uri:
                     data = await download_attachment(str(content_uri))
                     key, backend = await asyncio.to_thread(save_file, data)
+                    parsed_url = urlsplit(str(content_uri))
+                    filename = (
+                        parse_qs(parsed_url.query)
+                        .get(
+                            "filename",
+                            [unquote(parsed_url.path.rsplit("/", 1)[-1]) or "attachment"],
+                        )[0]
+                        .replace("\\", "/")
+                        .rsplit("/", 1)[-1][:200]
+                    )
+                    mime = mimetypes.guess_type(filename)[0] or {
+                        "image": "image/jpeg",
+                        "audio": "audio/ogg",
+                        "video": "video/mp4",
+                    }.get(message.kind, "application/octet-stream")
                     attachment = Attachment(
-                        storage_key=key, backend=backend, filename="attachment", size=len(data)
+                        storage_key=key,
+                        backend=backend,
+                        filename=filename,
+                        size=len(data),
+                        mime=mime,
                     )
                     db.add(attachment)
                     db.flush()
                     message.attachment_id = attachment.id
+                quote = item.get("quotedMessage") or {}
+                message.quoted_text = (
+                    str(quote.get("text", ""))[:1000] if isinstance(quote, dict) else ""
+                )
+                message.error_code = safe_error(item) if message.status == "error" else None
+                if inbound:
+                    conversation.unread_count += 1
                 db.add(message)
                 if (
                     timestamp >= conversation.updated_at
@@ -129,6 +179,17 @@ async def process_webhook(ctx, event_id: str):
                 changed.add(conversation.id)
             db.flush()
             for item in statuses:
+                receipt = db.get(DeliveryReceipt, item["messageId"])
+                status = str(item.get("status", ""))
+                if status not in ("sent", "delivered", "read", "error"):
+                    continue
+                if receipt is None:
+                    receipt = DeliveryReceipt(external_id=item["messageId"], status=status)
+                    db.add(receipt)
+                else:
+                    receipt.status = advance_status(receipt.status, status)
+                receipt.error_code = safe_error(item) if receipt.status == "error" else None
+                receipt.updated_at = now()
                 query = select(Message).where(Message.external_id == item["messageId"])
                 if item.get("channelId"):
                     query = query.where(Message.channel_id == item["channelId"])
@@ -137,6 +198,8 @@ async def process_webhook(ctx, event_id: str):
                     message.status = advance_status(
                         message.status, str(item.get("status", message.status))
                     )
+                    if message.status == "error":
+                        message.error_code = safe_error(item)
                     changed.add(message.conversation_id)
             event.state = "processed"
             event.attempts += 1
@@ -178,10 +241,43 @@ async def recover_pending(ctx):
                     .order_by(WebhookEvent.created_at)
                     .limit(100)
                 ).all()
+                sending = db.scalars(
+                    select(Message).where(
+                        Message.status == "sending", Message.next_attempt_at < now()
+                    )
+                ).all()
+                for msg in sending:
+                    msg.status, msg.error_code, msg.next_attempt_at = (
+                        "uncertain",
+                        "delivery_unknown",
+                        None,
+                    )
+                outgoing = db.scalars(
+                    select(Message.id)
+                    .where(
+                        Message.status.in_(["queued", "retry"]), Message.next_attempt_at <= now()
+                    )
+                    .order_by(Message.created_at)
+                    .limit(50)
+                ).all()
+                db.commit()
                 if time.time() - last_cleanup > 3600:
+                    days = get_setting(db, "inbox.auto_close_days", 14)
+                    db.execute(
+                        update(Conversation)
+                        .where(
+                            Conversation.state != "closed",
+                            Conversation.updated_at < now() - timedelta(days=days),
+                        )
+                        .values(state="closed")
+                    )
                     db.execute(delete(LoginSession).where(LoginSession.expires_at < now()))
                     db.commit()
                     last_cleanup = time.time()
+            for message_id in outgoing:
+                await ctx["redis"].enqueue_job(
+                    "deliver_message", message_id, _job_id="outbound:" + message_id
+                )
             for event_id in pending:
                 await ctx["redis"].enqueue_job(
                     "process_webhook", event_id, _job_id="webhook:" + event_id
@@ -206,7 +302,7 @@ async def shutdown(ctx):
 
 
 class WorkerSettings:
-    functions = [process_webhook]
+    functions = [process_webhook, deliver_message]
     redis_settings = RedisSettings.from_dsn(config().redis_url)
     on_startup = startup
     on_shutdown = shutdown

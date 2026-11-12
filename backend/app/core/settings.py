@@ -10,6 +10,8 @@ from app.models import AuditEvent, Setting
 
 # Secret classification is server-owned; API callers cannot change it.
 SETTING_SCHEMA = {
+    "inbox.first_messages_per_hour": ("integer", False, 20),
+    "inbox.auto_close_days": ("integer", False, 14),
     "wazzup.api_key": ("string", True, ""),
     "wazzup.default_channel_id": ("string", False, ""),
     "openai.api_key": ("string", True, ""),

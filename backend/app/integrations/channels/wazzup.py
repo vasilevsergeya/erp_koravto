@@ -2,8 +2,9 @@ import httpx
 
 
 class IntegrationError(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str, ambiguous: bool = False):
         self.code = code
+        self.ambiguous = ambiguous
         super().__init__(code)
 
 
@@ -32,6 +33,40 @@ class WazzupAdapter:
             return response.json()
         except ValueError:
             raise IntegrationError("invalid_response") from None
+
+    async def send_message(self, payload: dict) -> dict:
+        if not self.api_key:
+            raise IntegrationError("key_not_configured")
+        try:
+            async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
+                response = await client.post(
+                    "https://api.wazzup24.com/v3/message",
+                    json=payload,
+                    headers={"Authorization": "Bearer " + self.api_key},
+                )
+        except httpx.HTTPError:
+            raise IntegrationError("connection_failed", ambiguous=True) from None
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        if not response.is_success:
+            code = data.get("error", "") if isinstance(data, dict) else ""
+            if code == "repeatedCrmMessageId":
+                code = "REPEATED_CRM_MESSAGE_ID"
+            # Retain machine codes only; descriptions may include customer data or credentials.
+            import re
+
+            if not isinstance(code, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{1,99}", code):
+                code = "http_" + str(response.status_code)
+            raise IntegrationError(code, ambiguous=response.status_code >= 500)
+        if (
+            not isinstance(data, dict)
+            or not isinstance(data.get("messageId"), str)
+            or not 1 <= len(data["messageId"]) <= 100
+        ):
+            raise IntegrationError("invalid_response", ambiguous=True)
+        return {"messageId": data["messageId"]}
 
     async def list_channels(self):
         data = await self.request("GET", "/channels")

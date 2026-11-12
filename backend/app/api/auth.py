@@ -63,6 +63,7 @@ def admin_user(user: User = Depends(current_user)) -> User:
 
 def describe(session, user):
     return {
+        "id": user.id,
         "email": user.email,
         "role": user.role,
         "csrf_token": session.csrf_token,
