@@ -6,7 +6,7 @@ import json
 import random
 from datetime import timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from app.core.config import config
 from app.core.db import SessionLocal
@@ -125,6 +125,10 @@ async def deliver_message(ctx, message_id):
         except IntegrationError as error:
             result, failure = None, error
         with SessionLocal() as db:
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                {"key": payload["channelId"] + ":" + payload["chatId"]},
+            )
             msg = db.scalar(select(Message).where(Message.id == message_id).with_for_update())
             if not msg:
                 return

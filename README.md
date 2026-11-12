@@ -3,13 +3,18 @@
 Python 3.12 / FastAPI, PostgreSQL 16 + pgvector, Redis + arq, React 18 / TypeScript.
 Deployment: <https://erp.korean.parts>. Operational instructions: [deploy/README.md](deploy/README.md).
 
-This first stage includes administrator bootstrap, forced password change, password-only login,
-encrypted integration settings, read-only seeded boards, durable Wazzup inbound messages,
-attachments, WebSocket notifications, HTTPS and verified database backups.
+Implemented: password login with forced first-password change, encrypted settings,
+HTTPS/backups, durable inbound and outbound WhatsApp messages, attachments up to 10 MiB,
+new conversations by telephone, quotes, internal notes, assignments, human flags,
+close/reopen, unread counters, text/phone/order search and manual order references.
+Outbound jobs persist in PostgreSQL before sending; HTTP retries reuse a client UUID.
+Provider timeouts are retried only inside Wazzup's 60-second deduplication window;
+unknown delivery after that window requires an explicit duplicate-risk confirmation.
 
-The complete task workflow, outbound messages, AI responses, customer management, live 1C
-integration, SMTP delivery and the remaining CRM v1 features are subsequent development.
-Saving credentials does not enable those integrations.
+The complete task workflow, AI responses, unified customer management, live 1C integration,
+SMTP delivery and historical Wazzup import remain subsequent development. Boards are still
+read-only. Saving credentials does not enable those unfinished integrations. This release
+is an Inbox increment, not acceptance of the full CRM v1 specification.
 
 ## Development
 

@@ -337,6 +337,10 @@ async def new_conversation(
         raise HTTPException(400, "Выберите активный канал WhatsApp")
     # Serialize first-contact accounting across all managers and channels.
     db.execute(text("SELECT pg_advisory_xact_lock(734010)"))
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": channel_id + ":" + phone[1:]},
+    )
     conversation = db.scalar(
         select(Conversation)
         .where(Conversation.channel_id == channel_id, Conversation.chat_id == phone[1:])

@@ -257,8 +257,9 @@ async def recover_pending(ctx):
                     .where(
                         Message.status.in_(["queued", "retry"]), Message.next_attempt_at <= now()
                     )
-                    .order_by(Message.created_at)
-                    .limit(50)
+                    .distinct(Message.channel_id)
+                    .order_by(Message.channel_id, Message.created_at, Message.id)
+                    .limit(20)
                 ).all()
                 db.commit()
                 if time.time() - last_cleanup > 3600:
@@ -274,13 +275,13 @@ async def recover_pending(ctx):
                     db.execute(delete(LoginSession).where(LoginSession.expires_at < now()))
                     db.commit()
                     last_cleanup = time.time()
-            for message_id in outgoing:
-                await ctx["redis"].enqueue_job(
-                    "deliver_message", message_id, _job_id="outbound:" + message_id
-                )
             for event_id in pending:
                 await ctx["redis"].enqueue_job(
                     "process_webhook", event_id, _job_id="webhook:" + event_id
+                )
+            for message_id in outgoing:
+                await ctx["redis"].enqueue_job(
+                    "deliver_message", message_id, _job_id="outbound:" + message_id
                 )
         except asyncio.CancelledError:
             raise

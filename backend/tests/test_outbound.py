@@ -31,7 +31,7 @@ from app.models import (
     uid,
 )
 from app.services.outbox import deliver_message, status_forward
-from app.workers.worker import process_webhook
+from app.workers.worker import process_webhook, recover_pending
 
 
 class SendingContractTests(unittest.IsolatedAsyncioTestCase):
@@ -361,3 +361,94 @@ class OutboundAcceptance(unittest.TestCase):
                 ),
                 1,
             )
+
+    def test_restart_recovers_queue_and_never_resends_stale_inflight(self):
+        first, _ = self.queue()
+        second, _ = self.queue(text="Second in channel")
+        with SessionLocal() as db:
+            channel = db.get(Conversation, self.conversation_id).channel_id
+            stale = Message(
+                conversation_id=self.conversation_id,
+                channel_id=channel,
+                external_id="local:" + uid(),
+                direction="out",
+                author_type="user",
+                author_id=self.user_id,
+                body="Interrupted",
+                status="sending",
+                send_started_at=now() - timedelta(minutes=3),
+                next_attempt_at=now() - timedelta(seconds=1),
+            )
+            event = WebhookEvent(payload={})
+            db.add_all([stale, event])
+            db.commit()
+            stale_id, event_id = stale.id, event.id
+        with patch(
+            "app.workers.worker.asyncio.sleep", AsyncMock(side_effect=asyncio.CancelledError)
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(recover_pending(self.context))
+        queued = [call.args for call in self.context["redis"].enqueue_job.call_args_list]
+        self.assertIn(("deliver_message", first["id"]), queued)
+        self.assertNotIn(("deliver_message", second["id"]), queued)
+        self.assertLess(
+            queued.index(("process_webhook", event_id)),
+            queued.index(("deliver_message", first["id"])),
+        )
+        with SessionLocal() as db:
+            self.assertEqual(db.get(Message, stale_id).status, "uncertain")
+            db.get(WebhookEvent, event_id).state = "processed"
+            db.commit()
+
+    def test_search_pagination_and_order_filters(self):
+        self.queue(text="UniqueSearchToken Желаем проверить")
+        for q in ["UniqueSearchToken", "+1 (202) 555-0123"]:
+            response = self.client.get("/api/conversations", params={"q": q})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn(self.conversation_id, [c["id"] for c in response.json()])
+        response = self.client.patch(
+            "/api/conversations/" + self.conversation_id, json={"order_numbers": ["ORDER-TEST-42"]}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        response = self.client.get("/api/conversations", params={"q": "ORDER-TEST-42"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn(self.conversation_id, [c["id"] for c in response.json()])
+        with SessionLocal() as db:
+            channel = db.get(Conversation, self.conversation_id).channel_id
+            for i in range(55):
+                db.add(
+                    Message(
+                        conversation_id=self.conversation_id,
+                        channel_id=channel,
+                        external_id=uid(),
+                        direction="in",
+                        author_type="customer",
+                        body=str(i),
+                        created_at=now() - timedelta(minutes=60 - i),
+                    )
+                )
+            db.commit()
+        first = self.client.get("/api/conversations/" + self.conversation_id + "/messages").json()
+        older = self.client.get(
+            "/api/conversations/" + self.conversation_id + "/messages",
+            params={"before": first[0]["id"]},
+        ).json()
+        self.assertEqual(len(first), 50)
+        self.assertEqual(len(older), 6)
+        self.assertFalse(set(m["id"] for m in first) & set(m["id"] for m in older))
+
+    def test_upload_limits_and_signed_download(self):
+        response = self.client.post(
+            "/api/uploads", files={"file": ("safe.html", b"<script>alert(1)</script>", "text/html")}
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        msg, _ = self.queue(attachment_id=response.json()["id"], text="")
+        download = self.client.get(msg["attachment_url"])
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(download.headers["content-type"], "application/octet-stream")
+        self.assertIn("attachment;", download.headers["content-disposition"])
+        self.assertEqual(self.client.get(msg["attachment_url"] + "bad").status_code, 404)
+        big = self.client.post(
+            "/api/uploads", files={"file": ("big.bin", b"x" * (10 * 1024 * 1024 + 1))}
+        )
+        self.assertEqual(big.status_code, 400)
