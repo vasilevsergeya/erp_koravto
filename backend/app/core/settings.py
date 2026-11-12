@@ -16,7 +16,8 @@ SETTING_SCHEMA = {
     "wazzup.default_channel_id": ("string", False, ""),
     "openai.api_key": ("string", True, ""),
     "onec.base_url": ("string", False, ""),
-    "onec.api_key": ("string", True, ""),
+    "onec.username": ("string", False, ""),
+    "onec.password": ("string", True, ""),
     "smtp.host": ("string", False, ""),
     "smtp.port": ("integer", False, 587),
     "smtp.username": ("string", False, ""),
@@ -82,7 +83,13 @@ def masked_settings(db) -> list[dict]:
                 "type": kind,
                 "is_secret": secret,
                 "is_set": bool(value),
-                "value": ("••••" + str(value)[-4:] if value else "") if secret else value,
+                "value": (
+                    ("••••" if key == "onec.password" else "••••" + str(value)[-4:])
+                    if value
+                    else ""
+                )
+                if secret
+                else value,
             }
         )
     return result

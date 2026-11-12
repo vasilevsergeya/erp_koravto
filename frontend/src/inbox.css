@@ -333,3 +333,9 @@
     display: none;
   }
 }
+
+.crm-onec {border-top:1px solid #e5e9ef;margin-top:20px;padding-top:4px}
+.crm-onec-client {padding:10px 0;border-bottom:1px solid #e5e9ef;overflow-wrap:anywhere}
+.crm-onec-client > small {display:block;color:#6b7280;margin:6px 0}
+.crm-onec-orders {max-height:280px;overflow:auto}
+.crm-onec-stale {color:#986211;font-size:12px}

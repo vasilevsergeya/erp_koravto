@@ -21,7 +21,7 @@ void i18n.use(initReactI18next).init({lng:'ru', fallbackLng:'ru', interpolation:
   futureIntegrations:'Ключи для следующих подключений', futureHint:'Значения можно сохранить заранее. Обработка через 1С, OpenAI и SMTP на этом этапе не включена.',
   'inbox.first_messages_per_hour':'Лимит первых сообщений новым номерам за час', 'inbox.auto_close_days':'Закрывать диалоги без сообщений через дней',
   'wazzup.api_key':'Ключ API Wazzup', 'wazzup.default_channel_id':'Канал по умолчанию', 'openai.api_key':'Ключ OpenAI',
-  'onec.base_url':'Адрес 1С в ZeroTier', 'onec.api_key':'Ключ API 1С', 'smtp.host':'Сервер SMTP', 'smtp.port':'Порт SMTP',
+  'onec.base_url':'Адрес сервиса 1С', 'onec.username':'Пользователь 1С', 'onec.password':'Пароль 1С', 'smtp.host':'Сервер SMTP', 'smtp.port':'Порт SMTP',
   'smtp.username':'Логин SMTP', 'smtp.password':'Пароль SMTP', 'smtp.from_email':'Email отправителя',
   networkError:'Не удалось связаться с сервером', loadError:'Не удалось загрузить данные', retry:'Повторить',
   more:'Загрузить ещё', securityFoot:'Защищённое соединение · вход по email и паролю'

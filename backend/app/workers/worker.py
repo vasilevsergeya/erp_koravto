@@ -26,6 +26,7 @@ from app.models import (
     WebhookEvent,
     now,
 )
+from app.services.onec_customers import refresh_customers_loop
 from app.services.outbox import deliver_message, status_forward
 from app.services.storage import download_attachment, save_file
 
@@ -293,9 +294,13 @@ async def recover_pending(ctx):
 async def startup(ctx):
     configure_logging("worker")
     ctx["recovery_task"] = asyncio.create_task(recover_pending(ctx))
+    ctx["onec_task"] = asyncio.create_task(refresh_customers_loop())
 
 
 async def shutdown(ctx):
+    ctx["onec_task"].cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await ctx["onec_task"]
     ctx["recovery_task"].cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await ctx["recovery_task"]

@@ -8,7 +8,7 @@ import phonenumbers
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from itsdangerous import BadSignature, SignatureExpired
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, or_, select, text
+from sqlalchemy import Text, and_, case, cast, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.api.auth import current_user
@@ -17,6 +17,7 @@ from app.core.security import file_signer
 from app.core.settings import get_setting
 from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
 from app.models import Attachment, AuditEvent, Board, Conversation, Message, User, now
+from app.services.onec_customers import connection_settings, customer_snapshot, refresh_customer
 from app.services.outbox import emit, error_text
 from app.services.storage import MAX_FILE_SIZE, read_file, save_file
 
@@ -39,6 +40,8 @@ def locked_conversation(db, conversation_id):
 
 
 def describe_conversation(c, db):
+    onec = customer_snapshot(c, db)
+    customer_name = onec["clients"][0]["name"] if len(onec["clients"]) == 1 else ""
     last = db.scalar(
         select(Message)
         .where(Message.conversation_id == c.id)
@@ -48,6 +51,9 @@ def describe_conversation(c, db):
     return {
         "id": c.id,
         "name": c.name,
+        "display_name": customer_name or c.name or c.phone,
+        "onec_status": onec["status"],
+        "onec_stale": onec["stale"],
         "phone": c.phone,
         "chat_type": c.chat_type,
         "channel_id": c.channel_id,
@@ -123,6 +129,16 @@ def conversations(
             Conversation.order_numbers.op("@>")([q]),
             Conversation.id.in_(fulltext),
         ]
+        values, fingerprint = connection_settings(db)
+        if all(values):
+            conditions.append(
+                and_(
+                    Conversation.onec_config == fingerprint,
+                    Conversation.onec_phone
+                    == func.regexp_replace(Conversation.phone, "[^0-9]", "", "g"),
+                    cast(Conversation.onec_clients, Text).icontains(q, autoescape=True),
+                )
+            )
         if digits:
             conditions.append(Conversation.phone.contains(digits))
         query = query.where(or_(*conditions))
@@ -167,6 +183,22 @@ def conversation_detail(
     if not row:
         raise HTTPException(404, "Диалог не найден")
     return describe_conversation(row, db)
+
+
+@router.get("/conversations/{conversation_id}/customer")
+async def customer_from_onec(conversation_id: str, user=Depends(current_user)):
+    result = await refresh_customer(conversation_id)
+    if result is None:
+        raise HTTPException(404, "Диалог не найден")
+    return result
+
+
+@router.post("/conversations/{conversation_id}/customer/refresh")
+async def refresh_customer_from_onec(conversation_id: str, user=Depends(writer)):
+    result = await refresh_customer(conversation_id, force=True)
+    if result is None:
+        raise HTTPException(404, "Диалог не найден")
+    return result
 
 
 @router.get("/conversations/{conversation_id}/messages")

@@ -15,6 +15,7 @@ from app.core.settings import (
     put_setting,
 )
 from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
+from app.integrations.onec import OneCError, customer_endpoint
 from app.models import AuditEvent, User, WebhookEvent
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -44,6 +45,13 @@ def update_setting(
         raise HTTPException(400, "Укажите целое число от 1 до 65535")
     if kind == "string" and (not isinstance(body.value, str) or len(body.value) > 8192):
         raise HTTPException(400, "Некорректное значение")
+    if key == "onec.base_url" and body.value:
+        try:
+            body.value = customer_endpoint(str(body.value))
+        except OneCError:
+            raise HTTPException(
+                400, "Укажите HTTP(S)-адрес публикации 1С без пароля и параметров"
+            ) from None
     put_setting(db, key, body.value, secret, user.id)
     db.commit()
     invalidate_settings()

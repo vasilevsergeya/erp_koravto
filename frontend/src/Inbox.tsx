@@ -29,6 +29,13 @@ type Channel = {
   transport: string;
 };
 type Member = { id: string; name: string; role: string };
+type OneCCustomer = {
+  status: string;
+  clients: { name: string; realizations: string[] }[];
+  checked_at: string | null;
+  stale: boolean;
+  error: string | null;
+};
 const time = (value: string) =>
   new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "short",
@@ -65,6 +72,8 @@ export function Inbox({ user }: { user: User }) {
   const [newId, setNewId] = useState<string>(() => crypto.randomUUID());
   const [order, setOrder] = useState("");
   const [cardOpen, setCardOpen] = useState(false);
+  const [refreshingCustomer, setRefreshingCustomer] = useState(false);
+  const [customerError, setCustomerError] = useState("");
   const end = useRef<HTMLDivElement>(null);
   const pane = useRef<HTMLDivElement>(null);
   const drafts = useRef<
@@ -119,6 +128,32 @@ export function Inbox({ user }: { user: User }) {
     enabled: !!selected,
     refetchInterval: 5000,
   });
+  const customer = useQuery({
+    queryKey: ["onec-customer", selected],
+    queryFn: () => api<OneCCustomer>("/api/conversations/" + selected + "/customer"),
+    enabled: !!selected,
+    staleTime: 30000,
+    refetchInterval: 60000,
+    retry: false,
+  });
+  async function refreshCustomer() {
+    if (!selected) return;
+    const target = selected;
+    setRefreshingCustomer(true);
+    setCustomerError("");
+    try {
+      const result = await api<OneCCustomer>(
+        "/api/conversations/" + target + "/customer/refresh", "POST",
+      );
+      query.setQueryData(["onec-customer", target], result);
+      void query.invalidateQueries({ queryKey: ["conversation", target] });
+      void query.invalidateQueries({ queryKey: ["conversations"] });
+    } catch (e) {
+      setCustomerError(errorText(e));
+    } finally {
+      setRefreshingCustomer(false);
+    }
+  }
   const channels = useQuery({
     queryKey: ["channels"],
     queryFn: () => api<Channel[]>("/api/channels"),
@@ -176,6 +211,7 @@ export function Inbox({ user }: { user: User }) {
     setNote(draft?.note || false);
     setSendId(draft?.sendId || crypto.randomUUID());
     setError("");
+    setCustomerError("");
   }
   async function send() {
     if (!selected || busy) return;
@@ -277,11 +313,14 @@ export function Inbox({ user }: { user: User }) {
     ).values(),
   );
   const c = current.data;
+  const onec = customer.data;
+  const displayName = onec?.clients.length === 1
+    ? onec.clients[0].name : c?.display_name || c?.name || c?.phone;
   const customerCard = (
     <div className="crm-customer-content">
       <h3>{t("customer")}</h3>
       <TextInput
-        label={t("name")}
+        label={t("chatName")}
         key={c?.id + ":" + c?.name}
         defaultValue={c?.name || ""}
         disabled={!canWrite}
@@ -309,8 +348,26 @@ export function Inbox({ user }: { user: User }) {
         onChange={(e) => void change({ needs_human: e.currentTarget.checked })}
       />
 
-      <h4>{t("orders")}</h4>
-      <p className="crm-muted">{t("onecOffline")}</p>
+      <section className="crm-onec" aria-label={t("onecCustomer")}>
+        <h4>{t("onecCustomer")}</h4>
+        {customer.isLoading && <p role="status"><Loader size="xs" /> {t("onecLoading")}</p>}
+        {(customer.error || customerError) && <Alert color="orange">{customerError || errorText(customer.error)}</Alert>}
+        {onec && <>
+          {onec.status !== "matched" && <p className="crm-muted" role="status">{t("onec_" + onec.status)}</p>}
+          {onec.error && onec.status === "unavailable" && <p className="crm-muted">{t("onecError_" + onec.error, { defaultValue: t("onec_unavailable") })}</p>}
+          {onec.clients.map((client, index) => <div className="crm-onec-client" key={index}>
+            <b dir="auto">{client.name}</b>
+            <small>{t("orders")} · {client.realizations.length}</small>
+            {client.realizations.length ? <div className="crm-onec-orders">
+              {client.realizations.map((number, i) => <div className="crm-order" key={i}><span>{number}</span></div>)}
+            </div> : <p className="crm-muted">{t("onecNoOrders")}</p>}
+          </div>)}
+          {onec.stale && <p className="crm-onec-stale">{t("onecStale")}</p>}
+          {onec.checked_at && <small className="crm-muted">{t("onecChecked")} {time(onec.checked_at)}</small>}
+        </>}
+        {canWrite && <Button mt="sm" size="xs" variant="light" loading={refreshingCustomer || customer.isFetching} onClick={() => void refreshCustomer()}>{t("onecRefresh")}</Button>}
+      </section>
+      <h4>{t("manualOrders")}</h4>
       {c?.order_numbers.map((number) => (
         <div className="crm-order" key={number}>
           <span>{number}</span>
@@ -425,7 +482,7 @@ export function Inbox({ user }: { user: User }) {
               onClick={() => choose(item.id)}
             >
               <div>
-                <b>{item.name || item.phone}</b>
+                <b>{item.display_name || item.name || item.phone}</b>
                 <small>{time(item.updated_at)}</small>
               </div>
               <p>{item.last_message || t("attachment")}</p>
@@ -482,7 +539,7 @@ export function Inbox({ user }: { user: User }) {
                 ← {t("dialogs")}
               </Button>
               <div>
-                <b>{c?.name || c?.phone || t("loading")}</b>
+                <b>{displayName || t("loading")}</b>
                 <small>{c?.phone}</small>
               </div>
               <Button
