@@ -22,6 +22,7 @@ import {
 } from "./api";
 import "./inbox.css";
 import {ConversationTasks} from "./Tasks";
+import {CustomerSidebar} from "./Customers";
 import {taskLabel} from "./task-i18n";
 
 type Channel = {
@@ -73,6 +74,7 @@ export function Inbox({ user }: { user: User }) {
   const [channel, setChannel] = useState<string | null>(null);
   const [firstText, setFirstText] = useState("");
   const [newId, setNewId] = useState<string>(() => crypto.randomUUID());
+  useEffect(()=>{const open=()=>{const raw=sessionStorage.getItem("crm-new-conversation");if(raw){try{const value=JSON.parse(raw);setPhone(value.phone||"");setName(value.name||"");setNewOpen(true);setNewId(crypto.randomUUID());setFirstText("");}catch{/* ignore invalid local state */}sessionStorage.removeItem("crm-new-conversation");}};open();window.addEventListener("crm:new-conversation",open);return()=>window.removeEventListener("crm:new-conversation",open);},[]);
   const [order, setOrder] = useState("");
   const [cardOpen, setCardOpen] = useState(false);
   const [refreshingCustomer, setRefreshingCustomer] = useState(false);
@@ -317,10 +319,10 @@ export function Inbox({ user }: { user: User }) {
   );
   const c = current.data;
   const onec = customer.data;
-  const displayName = onec?.clients.length === 1
-    ? onec.clients[0].name : c?.display_name || c?.name || c?.phone;
+  const displayName = c?.display_name || c?.name || c?.phone;
   const customerCard = (
     <div className="crm-customer-content">
+      {c?.customer_id && <CustomerSidebar id={c.customer_id}/>}
       {c && <ConversationTasks conversation={c}/>}
       <h3>{t("customer")}</h3>
       <TextInput

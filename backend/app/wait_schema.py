@@ -9,7 +9,7 @@ for attempt in range(120):
         with engine.connect() as connection:
             if (
                 connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-                == "0005"
+                == "0006"
             ):
                 break
     except Exception:

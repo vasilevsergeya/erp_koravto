@@ -21,6 +21,7 @@ from app.models import (
     AuditEvent,
     Board,
     Conversation,
+    Customer,
     Notification,
     Task,
     TaskComment,
@@ -30,6 +31,7 @@ from app.models import (
     now,
     uid,
 )
+from app.services.customers import attach_conversation, customer_row, structure_lock
 from app.services.tasks import history, notify, publish_tasks, system_note
 
 router = APIRouter(prefix="/api", tags=["tasks"])
@@ -57,6 +59,7 @@ class TaskFields(Input):
     due_at: datetime | None = None
     due_date_only: bool = False
     conversation_id: str | None = None
+    customer_id: str | None = None
     order_no: str = Field("", max_length=100)
     part_no: str = Field("", max_length=100)
     quantity: int | None = Field(None, ge=1, le=1000000)
@@ -95,6 +98,7 @@ class TaskPatch(Input):
     due_at: datetime | None = None
     due_date_only: bool | None = None
     conversation_id: str | None = None
+    customer_id: str | None = None
     order_no: str | None = None
     part_no: str | None = None
     quantity: int | None = None
@@ -133,8 +137,16 @@ def validate_fields(db, fields, actor, old=None):
     kind = db.get(TaskType, fields.type_id)
     if not kind or (not kind.active and (not old or old.type_id != kind.id)):
         raise HTTPException(400, "Выберите действующий тип задачи")
-    if fields.conversation_id and not db.get(Conversation, fields.conversation_id):
-        raise HTTPException(400, "Диалог не найден")
+    if fields.customer_id:
+        customer_row(db, fields.customer_id)
+    if fields.conversation_id:
+        conversation = db.get(Conversation, fields.conversation_id)
+        if not conversation:
+            raise HTTPException(400, "Диалог не найден")
+        attach_conversation(db, conversation)
+        if fields.customer_id and fields.customer_id != conversation.customer_id:
+            raise HTTPException(400, "Диалог принадлежит другому клиенту")
+        fields.customer_id = conversation.customer_id
     for file_id in fields.attachment_ids:
         attachment = db.get(Attachment, file_id)
         if not attachment or (
@@ -168,6 +180,9 @@ def describe(task, db):
         customer_name = conversation.name or conversation.phone
         if len(conversation.onec_clients) == 1:
             customer_name = conversation.onec_clients[0].get("name") or customer_name
+    customer = db.get(Customer, task.customer_id) if task.customer_id else None
+    if customer and (customer.name_manual or not customer_name):
+        customer_name = customer.name or customer_name
     return {
         **{name: getattr(task, name) for name in TaskFields.model_fields},
         "id": task.id,
@@ -190,6 +205,7 @@ def describe(task, db):
 
 @router.post("/tasks", status_code=201)
 def create_task(body: TaskCreate, user=Depends(current_user), db: Session = Depends(get_db)):
+    structure_lock(db)
     db.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
         {"key": "task:" + str(body.client_id)},
@@ -269,6 +285,7 @@ def apply_change(db, task, fields, actor, comment=""):
 def patch_task(
     key: str, body: TaskPatch, user=Depends(current_user), db: Session = Depends(get_db)
 ):
+    structure_lock(db)
     original = task_row(db, key)
     target_id = body.board_id or original.board_id
     # Same lock order as status removal; serializes transitions with board edits.
@@ -280,7 +297,8 @@ def patch_task(
         raise HTTPException(409, "Задачу уже изменили. Обновите карточку и повторите действие")
     values = body.model_dump(exclude_unset=True, exclude={"version", "completion_comment"})
     if any(
-        value is None and key not in ("assignee_id", "due_at", "conversation_id", "quantity")
+        value is None
+        and key not in ("assignee_id", "due_at", "conversation_id", "customer_id", "quantity")
         for key, value in values.items()
     ):
         raise HTTPException(422, "Пустое значение недопустимо")
@@ -310,6 +328,7 @@ def filtered_tasks(
     author_id: str | None = None,
     assignee_id: str | None = None,
     conversation_id: str | None = None,
+    customer_id: str | None = None,
     label: str | None = None,
     view: Literal["all", "open", "mine", "created", "overdue"] = "open",
     created_from: datetime | None = None,
@@ -327,6 +346,7 @@ def filtered_tasks(
         ("type_id", type_id),
         ("author_id", author_id),
         ("conversation_id", conversation_id),
+        ("customer_id", customer_id),
     ]:
         if value:
             query = query.where(getattr(Task, name) == value)
@@ -349,6 +369,9 @@ def filtered_tasks(
     if q:
         query = query.where(
             or_(
+                Task.customer_id.in_(
+                    select(Customer.id).where(Customer.name.icontains(q, autoescape=True))
+                ),
                 Task.title.ilike("%" + q + "%"),
                 Task.order_no.ilike("%" + q + "%"),
                 Task.part_no.ilike("%" + q + "%"),

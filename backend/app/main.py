@@ -13,7 +13,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from starlette.responses import JSONResponse
 
-from app.api import auth, inbox, settings, tasks, webhooks
+from app.api import auth, customers, inbox, settings, tasks, webhooks
 from app.core.config import config
 from app.core.db import SessionLocal, engine
 from app.core.logging import configure_logging
@@ -39,7 +39,14 @@ app = FastAPI(
     openapi_url=None,
     lifespan=lifespan,
 )
-for router in (auth.router, settings.router, webhooks.router, inbox.router, tasks.router):
+for router in (
+    auth.router,
+    settings.router,
+    webhooks.router,
+    inbox.router,
+    tasks.router,
+    customers.router,
+):
     app.include_router(router)
 
 _buckets: OrderedDict = OrderedDict()

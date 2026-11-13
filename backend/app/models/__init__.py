@@ -97,6 +97,8 @@ class Conversation(Base):
         UniqueConstraint("channel_id", "chat_id", name="uq_conversation_channel_chat"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    customer_id: Mapped[str | None] = mapped_column(ForeignKey("customers.id"), index=True)
+    customer_identity_id: Mapped[str | None] = mapped_column(ForeignKey("customer_identities.id"))
     channel_id: Mapped[str] = mapped_column(String(100))
     chat_id: Mapped[str] = mapped_column(String(200))
     chat_type: Mapped[str] = mapped_column(String(40), default="whatsapp")
@@ -196,6 +198,7 @@ class Task(Base):
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     due_date_only: Mapped[bool] = mapped_column(Boolean, default=False)
     conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
+    customer_id: Mapped[str | None] = mapped_column(ForeignKey("customers.id"), index=True)
     order_no: Mapped[str] = mapped_column(String(100), default="")
     part_no: Mapped[str] = mapped_column(String(100), default="")
     quantity: Mapped[int | None] = mapped_column(Integer)
@@ -236,3 +239,52 @@ class Notification(Base):
     dedupe_key: Mapped[str | None] = mapped_column(String(180), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Customer(Base):
+    __tablename__ = "customers"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    name_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    language: Mapped[str] = mapped_column(String(20), default="")
+    segment: Mapped[str] = mapped_column(String(20), default="")
+    country: Mapped[str] = mapped_column(String(2), default="")
+    tags: Mapped[list] = mapped_column(JSONB, default=list)
+    order_numbers: Mapped[list] = mapped_column(JSONB, default=list)
+    default_owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    merged_into_id: Mapped[str | None] = mapped_column(ForeignKey("customers.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class CustomerIdentity(Base):
+    __tablename__ = "customer_identities"
+    __table_args__ = (UniqueConstraint("type", "value", name="uq_customer_identity"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), index=True)
+    type: Mapped[str] = mapped_column(String(30))
+    value: Mapped[str] = mapped_column(String(500))
+    source: Mapped[str] = mapped_column(String(30), default="user")
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CustomerNote(Base):
+    __tablename__ = "customer_notes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    client_id: Mapped[str] = mapped_column(String(36), unique=True)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), index=True)
+    author_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CustomerEvent(Base):
+    __tablename__ = "customer_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), index=True)
+    actor_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    action: Mapped[str] = mapped_column(String(40))
+    details: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

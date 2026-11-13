@@ -1,7 +1,7 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 void i18n.use(initReactI18next).init({lng:'ru', fallbackLng:'ru', interpolation:{escapeValue:false}, resources:{ru:{translation:{
-  brand:'KORAVTO', workspace:'Рабочее пространство', inbox:'Диалоги', boards:'Задачи', settings:'Настройки',
+  brand:'KORAVTO', workspace:'Рабочее пространство', inbox:'Диалоги', boards:'Задачи', customers:'Клиенты', customersHint:'Общая карточка, диалоги и история работы', settings:'Настройки',
   logout:'Выйти', login:'Войти', email:'Email', password:'Пароль', signIn:'Вход в CRM', signInHint:'Клиенты, сообщения и работа команды — в одном месте.',
   authTag:'ДОСТУП ДЛЯ КОМАНДЫ', security:'Защита аккаунта', passwordTitle:'Создайте постоянный пароль', passwordHint:'Не менее 7 символов. Временный пароль после смены перестанет действовать.',
   newPassword:'Новый пароль', savePassword:'Сохранить пароль',

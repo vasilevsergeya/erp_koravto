@@ -23,6 +23,8 @@ import { useTranslation } from "react-i18next";
 import { api, uploadFile, type Conversation, type User } from "./api";
 import { taskLabel } from "./task-i18n";
 import "./tasks.css";
+import { CustomerPicker } from "./CustomerPicker";
+import { openCustomer } from "./customer-api";
 
 type Status = {
   id: string;
@@ -62,6 +64,7 @@ type Task = {
   due_date_only: boolean;
   conversation_id: string | null;
   customer_name: string;
+  customer_id: string | null;
   order_no: string;
   part_no: string;
   quantity: number | null;
@@ -89,7 +92,11 @@ type Detail = Task & {
   attachments: { id: string; name: string; url: string; size: number }[];
 };
 type TaskPage = { items: Task[]; total: number };
-type TaskEvent = { key?: string; conversation?: Conversation };
+type TaskEvent = {
+  key?: string;
+  conversation?: Conversation;
+  customer?: { id: string; name: string };
+};
 type Notice = {
   id: string;
   read_at: string | null;
@@ -103,9 +110,14 @@ export const openTask = (key: string) =>
   window.dispatchEvent(
     new CustomEvent<TaskEvent>("crm:task", { detail: { key } }),
   );
-const createTask = (conversation?: Conversation) =>
+export const createTask = (
+  conversation?: Conversation,
+  customer?: { id: string; name: string },
+) =>
   window.dispatchEvent(
-    new CustomEvent<TaskEvent>("crm:task", { detail: { conversation } }),
+    new CustomEvent<TaskEvent>("crm:task", {
+      detail: { conversation, customer },
+    }),
   );
 const currentTask = () =>
   /^\/tasks\/(T-\d+)$/.exec(location.pathname)?.[1] || null;
@@ -171,6 +183,8 @@ function refresh(query: ReturnType<typeof useQueryClient>) {
     "conversation",
     "messages",
     "conversation-counts",
+    "customer",
+    "customers",
   ])
     void query.invalidateQueries({ queryKey: [key] });
 }
@@ -178,17 +192,22 @@ function refresh(query: ReturnType<typeof useQueryClient>) {
 function TaskForm({
   task,
   conversation,
+  customer,
   onDone,
   onCancel,
 }: {
   task?: Detail;
   conversation?: Conversation;
+  customer?: { id: string; name: string };
   onDone: (task: Task) => void;
   onCancel: () => void;
 }) {
   const { t } = useTranslation("tasks");
   const { boards, types, team, config } = useCatalogs();
   const zone = config.data?.timezone || "Asia/Seoul";
+  const [customerId, setCustomerId] = useState(
+    task?.customer_id || conversation?.customer_id || customer?.id || null,
+  );
   const [title, setTitle] = useState(task?.title || "");
   const [description, setDescription] = useState(task?.description || "");
   const [boardId, setBoard] = useState(task?.board_id || "");
@@ -254,6 +273,7 @@ function TaskForm({
           : null,
         due_date_only: dateOnly,
         conversation_id: task?.conversation_id || conversation?.id || null,
+        customer_id: customerId,
         order_no: order,
         part_no: part,
         quantity: qty ? Number(qty) : null,
@@ -294,6 +314,11 @@ function TaskForm({
         onChange={(e) => setTitle(e.currentTarget.value)}
         required
         maxLength={250}
+      />
+      <CustomerPicker
+        value={customerId}
+        onChange={setCustomerId}
+        disabled={!!(task?.conversation_id || conversation)}
       />
       <Textarea
         label={t("description")}
@@ -462,6 +487,7 @@ export function TaskDialogs() {
   const [key, setKey] = useState<string | null>(currentTask);
   const [creating, setCreating] = useState(false);
   const [conversation, setConversation] = useState<Conversation>();
+  const [customer, setCustomer] = useState<{ id: string; name: string }>();
   const [editing, setEditing] = useState(false);
   const [comment, setComment] = useState("");
   const [mentions, setMentions] = useState<string[]>([]);
@@ -489,6 +515,7 @@ export function TaskDialogs() {
       setKey(d.key || null);
       setCreating(!d.key);
       setConversation(d.conversation);
+      setCustomer(d.customer);
       if (d.key) history.pushState({}, "", "/tasks/" + d.key);
     };
     const pop = () => {
@@ -537,6 +564,10 @@ export function TaskDialogs() {
   const showValue = (field: string, v: unknown): string => {
     if (v === null || v === undefined || v === "") return "—";
     if (Array.isArray(v)) return v.map((x) => showValue(field, x)).join(", ");
+    if (field === "customer_id")
+      return v === task?.customer_id
+        ? task.customer_name || "Клиент"
+        : "Другой клиент";
     if (field === "board_id")
       return catalogs.boards.data?.find((x) => x.id === v)?.name || String(v);
     if (field === "status_id")
@@ -556,7 +587,12 @@ export function TaskDialogs() {
   return (
     <>
       <Modal opened={creating} onClose={close} title={t("create")} size="lg">
-        <TaskForm conversation={conversation} onDone={saved} onCancel={close} />
+        <TaskForm
+          conversation={conversation}
+          customer={customer}
+          onDone={saved}
+          onCancel={close}
+        />
       </Modal>
       <Drawer
         opened={!!key}
@@ -587,6 +623,17 @@ export function TaskDialogs() {
                 </Button>
               </div>
               <h2>{task.title}</h2>
+              {task.customer_id && (
+                <Button
+                  variant="light"
+                  onClick={() => {
+                    close();
+                    openCustomer(task.customer_id!);
+                  }}
+                >
+                  {task.customer_name || "Клиент"}
+                </Button>
+              )}
               <div className="task-description" dir="auto">
                 <Markdown skipHtml>{task.description || "—"}</Markdown>
               </div>

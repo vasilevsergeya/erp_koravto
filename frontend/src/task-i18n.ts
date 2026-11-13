@@ -110,6 +110,7 @@ const ru = {
   createLinked: "Создать задачу",
   noLink: "Без диалога",
   customer: "Клиент",
+  customer_id: "Клиент",
   readOnlyAuthor: "Автор сохраняется при создании и не меняется",
   markdown: "Текст и Markdown; HTML не выполняется",
   link: "Прямая ссылка",

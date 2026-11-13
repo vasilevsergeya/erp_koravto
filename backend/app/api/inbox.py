@@ -16,7 +16,17 @@ from app.core.db import get_db
 from app.core.security import file_signer
 from app.core.settings import get_setting
 from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
-from app.models import Attachment, AuditEvent, Conversation, Message, User, now
+from app.models import (
+    Attachment,
+    AuditEvent,
+    Conversation,
+    Customer,
+    CustomerIdentity,
+    Message,
+    User,
+    now,
+)
+from app.services.customers import attach_conversation, structure_lock
 from app.services.onec_customers import connection_settings, customer_snapshot, refresh_customer
 from app.services.outbox import emit, error_text
 from app.services.storage import MAX_FILE_SIZE, read_file, save_file
@@ -42,6 +52,9 @@ def locked_conversation(db, conversation_id):
 def describe_conversation(c, db):
     onec = customer_snapshot(c, db)
     customer_name = onec["clients"][0]["name"] if len(onec["clients"]) == 1 else ""
+    profile = db.get(Customer, c.customer_id) if c.customer_id else None
+    if profile and profile.name_manual:
+        customer_name = profile.name
     last = db.scalar(
         select(Message)
         .where(Message.conversation_id == c.id)
@@ -51,7 +64,8 @@ def describe_conversation(c, db):
     return {
         "id": c.id,
         "name": c.name,
-        "display_name": customer_name or c.name or c.phone,
+        "display_name": customer_name or (profile.name if profile else "") or c.name or c.phone,
+        "customer_id": c.customer_id,
         "onec_status": onec["status"],
         "onec_stale": onec["stale"],
         "phone": c.phone,
@@ -126,6 +140,9 @@ def conversations(
         )
         digits = "".join(ch for ch in q if ch.isascii() and ch.isdigit())
         conditions = [
+            Conversation.customer_id.in_(
+                select(Customer.id).where(Customer.name.icontains(q, autoescape=True))
+            ),
             Conversation.name.icontains(q, autoescape=True),
             Conversation.order_numbers.op("@>")([q]),
             Conversation.id.in_(fulltext),
@@ -142,6 +159,13 @@ def conversations(
             )
         if digits:
             conditions.append(Conversation.phone.contains(digits))
+            conditions.append(
+                Conversation.customer_id.in_(
+                    select(CustomerIdentity.customer_id).where(
+                        CustomerIdentity.type == "phone", CustomerIdentity.value.contains(digits)
+                    )
+                )
+            )
         query = query.where(or_(*conditions))
     rows = db.scalars(
         query.order_by(
@@ -368,6 +392,7 @@ async def new_conversation(
     selected = next((c for c in choices if c["channelId"] == channel_id), None)
     if not selected or selected["state"] != "active":
         raise HTTPException(400, "Выберите активный канал WhatsApp")
+    structure_lock(db)
     # Serialize first-contact accounting across all managers and channels.
     db.execute(text("SELECT pg_advisory_xact_lock(734010)"))
     db.execute(
@@ -400,6 +425,7 @@ async def new_conversation(
         db.add(conversation)
         db.flush()
         db.add(AuditEvent(user_id=user.id, action="conversation.first", target=conversation.id))
+    attach_conversation(db, conversation)
     enqueue(db, conversation, body, user)
     db.commit()
     emit(conversations=[conversation.id])

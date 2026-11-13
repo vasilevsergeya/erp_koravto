@@ -26,6 +26,7 @@ from app.models import (
     WebhookEvent,
     now,
 )
+from app.services.customers import attach_conversation, structure_lock
 from app.services.onec_customers import refresh_customers_loop
 from app.services.outbox import deliver_message, status_forward
 from app.services.storage import download_attachment, save_file
@@ -74,6 +75,8 @@ async def process_webhook(ctx, event_id: str):
             if event is None or event.state not in ("pending", "error"):
                 return
             messages, statuses = WazzupAdapter.parse_webhook(event.payload)
+            if messages:
+                structure_lock(db)
             for item in messages:
                 db.execute(
                     text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
@@ -120,6 +123,7 @@ async def process_webhook(ctx, event_id: str):
                     )
                     db.add(conversation)
                     db.flush()
+                attach_conversation(db, conversation)
                 inbound = item.get("status") == "inbound" and not item.get("isEcho")
                 timestamp = message_time(item.get("dateTime"))
                 message = Message(
