@@ -1,6 +1,7 @@
 """Opt-in employee notifications with durable delivery state, no historical mail flood."""
 
 import asyncio
+import logging
 import smtplib
 import ssl
 from datetime import datetime, timedelta
@@ -261,8 +262,10 @@ async def notification_loop():
                 await deliver_notification(ident)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            pass
+        except Exception as error:
+            logging.getLogger("crm").warning(
+                "notifications.recovery.failed", extra={"error_type": type(error).__name__}
+            )
         await asyncio.sleep(5)
 
 

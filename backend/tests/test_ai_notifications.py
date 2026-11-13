@@ -123,6 +123,9 @@ class PolicyTests(unittest.TestCase):
 @unittest.skipUnless(os.getenv("CRM_INTEGRATION_TEST") == "1", "Requires isolated database")
 class AIAcceptance(unittest.TestCase):
     def setUp(self):
+        embedding = patch.object(OpenAIAdapter, "embedding", AsyncMock(return_value=[0.01] * 1536))
+        embedding.start()
+        self.addCleanup(embedding.stop)
         self.user, self.staff, self.cid, self.mid = uid(), uid(), uid(), uid()
         self.cfg = AIConfig()
         self.cfg.policies["shipping"] = "Shipping terms are confirmed individually by the manager."
@@ -385,7 +388,7 @@ class AIAcceptance(unittest.TestCase):
             d = db.get(AIDraft, self.did)
             c = db.get(Conversation, self.cid)
             d.policy = {**d.policy, "passed": True, "config_version": config_version(self.cfg)}
-            self.assertTrue(auto_allowed(db, d, c))
+            self.assertTrue(auto_allowed(db, d, c), (d.state, d.reason, d.policy))
             db.add(AIUsage(model="test", purpose="test", cost_usd=2))
             db.flush()
             self.assertFalse(auto_allowed(db, d, c))

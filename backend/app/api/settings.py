@@ -50,9 +50,15 @@ def update_setting(
         raise HTTPException(400, "Некорректное значение")
     if key == "smtp.security" and body.value not in ("starttls", "ssl"):
         raise HTTPException(400, "Выберите starttls или ssl")
-    if key in ("smtp.host", "smtp.username", "smtp.from_email") and any(c in str(body.value) for c in "\r\n"):
+    if key in ("smtp.host", "smtp.username", "smtp.from_email") and any(
+        c in str(body.value) for c in "\r\n"
+    ):
         raise HTTPException(400, "Недопустимые символы")
-    if key == "smtp.host" and body.value and ("/" in str(body.value) or ":" in str(body.value) or " " in str(body.value)):
+    if (
+        key == "smtp.host"
+        and body.value
+        and ("/" in str(body.value) or ":" in str(body.value) or " " in str(body.value))
+    ):
         raise HTTPException(400, "Укажите имя SMTP-сервера без протокола и порта")
     if key == "tasks.timezone":
         try:

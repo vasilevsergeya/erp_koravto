@@ -123,7 +123,8 @@ def settings(db):
 
 
 def config_version(cfg):
-    return hashlib.sha256(json.dumps(cfg.model_dump(), sort_keys=True).encode()).hexdigest()
+    canonical = AIConfig.model_validate(cfg.model_dump()).model_dump()
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
 
 
 def working_time(cfg, timestamp):

@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import random
 import re
 from datetime import timedelta
@@ -244,6 +245,8 @@ def policy_check(cfg, classification, answer, calls):
     )
     if classification.intent in ("order_status", "availability_price") and not fact:
         reasons.append("no_source_facts")
+    if classification.intent == "shipping" and not cfg.policies.get("shipping", "").strip():
+        reasons.append("shipping_not_configured")
     if classification.intent in ("payment", "return_complaint"):
         reasons.append("human_required")
     if not cfg.coefficient and re.search(r"\$|\b(?:USD|KRW|dollars?|won)\b|доллар|₩", reply, re.I):
@@ -502,7 +505,6 @@ async def process_draft(ctx, draft_id):
                     .order_by(ApprovedExample.embedding.op("<=>")(vector))
                     .limit(20)
                 ).all()
-                rows = sorted(rows, key=lambda e: e.language != context["customer"]["language"])[:5]
                 examples = [
                     {
                         "question": r.question,
@@ -645,6 +647,9 @@ async def process_draft(ctx, draft_id):
 
 def auto_allowed(db, draft, conversation):
     cfg = settings(db)
+    prompt_id = db.scalar(select(AIPrompt.id).where(AIPrompt.active))
+    if draft.prompt_id != prompt_id:
+        return False
     if (
         conversation.needs_human
         or not current(db, draft, conversation)
@@ -803,6 +808,8 @@ async def recovery(ctx):
                 )
         except asyncio.CancelledError:
             raise
-        except Exception:
-            pass
+        except Exception as error:
+            logging.getLogger("crm").warning(
+                "ai.recovery.failed", extra={"error_type": type(error).__name__}
+            )
         await asyncio.sleep(2)

@@ -108,7 +108,9 @@ async def process_webhook(ctx, event_id: str):
                     if existing.status == "error":
                         existing.error_code = safe_error(item)
                     existing.deleted = existing.deleted or bool(item.get("isDeleted"))
-                    if existing.direction == "in" and (item.get("isEdited") or item.get("isDeleted")):
+                    if existing.direction == "in" and (
+                        item.get("isEdited") or item.get("isDeleted")
+                    ):
                         supersede(db, existing.conversation_id, "message_changed")
                     changed.add(existing.conversation_id)
                     continue

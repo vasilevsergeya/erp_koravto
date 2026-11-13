@@ -50,6 +50,7 @@ const reasons: Record<string, string> = {
   forbidden_phrase: "Обнаружена запрещённая фраза",
   exact_date: "Указана точная дата",
   no_source_facts: "Нет подтверждённых данных из 1С",
+  shipping_not_configured: "Условия доставки ещё не настроены",
   human_required: "Требуется менеджер",
   price_not_configured: "Коэффициент цены не задан",
   unknown_price: "Не задан тариф модели",

@@ -315,15 +315,16 @@ def report(
     from datetime import timedelta
 
     since = now() - timedelta(days=days)
+    week = func.date_trunc("week", AIDraft.created_at).label("week")
     rows = db.execute(
         select(
-            func.date_trunc("week", AIDraft.created_at),
+            week,
             AIDraft.intent,
             AIDraft.decision,
             func.count(),
         )
         .where(AIDraft.created_at >= since)
-        .group_by(func.date_trunc("week", AIDraft.created_at), AIDraft.intent, AIDraft.decision)
+        .group_by(week, AIDraft.intent, AIDraft.decision)
     ).all()
     drafts = db.scalars(
         select(AIDraft)
