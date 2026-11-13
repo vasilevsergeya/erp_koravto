@@ -17,6 +17,7 @@ from app.core.security import file_signer
 from app.core.settings import get_setting
 from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
 from app.models import (
+    AIDraft,
     Attachment,
     AuditEvent,
     Conversation,
@@ -28,6 +29,7 @@ from app.models import (
 )
 from app.services.ai import supersede
 from app.services.customers import attach_conversation, structure_lock
+from app.services.message_content import rich_content
 from app.services.onec_customers import connection_settings, customer_snapshot, refresh_customer
 from app.services.outbox import emit, error_text
 from app.services.storage import MAX_FILE_SIZE, read_file, save_file
@@ -48,6 +50,19 @@ def locked_conversation(db, conversation_id):
     if not row:
         raise HTTPException(404, "Диалог не найден")
     return row
+
+
+def pending_draft():
+    return (
+        select(AIDraft.id)
+        .where(
+            AIDraft.conversation_id == Conversation.id,
+            AIDraft.decision == "pending",
+            AIDraft.state.in_(("ready", "escalated")),
+            AIDraft.body != "",
+        )
+        .exists()
+    )
 
 
 def describe_conversation(c, db):
@@ -80,6 +95,11 @@ def describe_conversation(c, db):
         "order_numbers": c.order_numbers,
         "unread_count": c.unread_count,
         "task_updated": c.task_updated,
+        "has_ai_draft": bool(
+            db.scalar(
+                select(pending_draft()).select_from(Conversation).where(Conversation.id == c.id)
+            )
+        ),
         "last_message": last.body[:120] if last else "",
         "last_status": last.status if last else "",
     }
@@ -97,6 +117,8 @@ def describe_message(m, db):
         "kind": m.kind,
         "status": m.status,
         "edited": m.edited,
+        "history": m.history,
+        "content": rich_content(m.kind, m.body),
         "deleted": m.deleted,
         "created_at": m.created_at,
         "is_private_note": m.is_private_note,
@@ -122,8 +144,11 @@ def conversations(
     assignee: str = "",
     channel: str = "",
     needs_human: bool = False,
+    ai_draft: bool = False,
 ):
     query = select(Conversation)
+    if ai_draft:
+        query = query.where(pending_draft())
     if state:
         query = query.where(Conversation.state == state)
     if assignee:
@@ -183,6 +208,9 @@ def conversations(
 @router.get("/conversations/counts")
 def counts(user=Depends(current_user), db: Session = Depends(get_db)):
     return {
+        "ai_draft": db.scalar(
+            select(func.count()).select_from(Conversation).where(pending_draft())
+        ),
         "all": db.scalar(select(func.count()).select_from(Conversation)),
         "waiting_us": db.scalar(
             select(func.count()).select_from(Conversation).where(Conversation.state == "waiting_us")

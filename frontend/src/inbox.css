@@ -339,3 +339,8 @@
 .crm-onec-client > small {display:block;color:#6b7280;margin:6px 0}
 .crm-onec-orders {max-height:280px;overflow:auto}
 .crm-onec-stale {color:#986211;font-size:12px}
+
+.quick-reply-picker{padding:12px;background:#f3f7f7;border:1px solid #d6e2df;border-radius:8px;margin-bottom:8px;max-height:300px;overflow:auto}
+
+.crm-dialog .mantine-Badge-root{color:var(--badge-color)}
+.crm-dialog .mantine-Badge-label{color:inherit}

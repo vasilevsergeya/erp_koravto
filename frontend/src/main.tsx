@@ -39,6 +39,9 @@ import { Inbox } from "./Inbox";
 import "./inbox-i18n";
 import { TasksPage, TaskDialogs, NotificationBell } from "./Tasks";
 import { CustomersPage } from "./Customers";
+import { InboxReport } from "./InboxReport";
+import { TeamAdmin, AccessLink } from "./TeamAdmin";
+import { QuickReplySettings } from "./QuickReplies";
 import { AISettings, AIReport } from "./AI";
 import {
   NotificationIntegration,
@@ -462,6 +465,7 @@ function SettingsPage() {
           ))}
         </div>
       </section>
+      <QuickReplySettings />
       <section className="surface settings-card">
         <h3>Клиенты и заказы · 1С</h3>
         <p className="muted">
@@ -552,9 +556,27 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       socket = new WebSocket(
         location.origin.replace(/^http/, "ws") + "/api/ws",
       );
+      socket.onopen = () => {
+        void query.invalidateQueries();
+      };
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
+          if (
+            [
+              "team.changed",
+              "quick_replies.changed",
+              "integrations.changed",
+            ].includes(payload.type)
+          ) {
+            for (const key of [
+              "admin-users",
+              "team",
+              "quick-replies",
+              "integration-health",
+            ])
+              void query.invalidateQueries({ queryKey: [key] });
+          }
           if (
             payload.type === "messages.changed" ||
             payload.type === "tasks.changed" ||
@@ -633,8 +655,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     { id: "boards", icon: LayoutDashboard },
     { id: "customers", icon: Users },
     { id: "preferences", icon: Bell },
+    ...(user.role !== "staff"
+      ? [{ id: "inboxReport", icon: LayoutDashboard }]
+      : []),
     ...(user.role === "admin"
       ? [
+          { id: "employees", icon: Users },
           { id: "aiReport", icon: Sparkles },
           { id: "settings", icon: Settings },
         ]
@@ -719,6 +745,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <CustomersPage user={user} />
           ) : page === "preferences" ? (
             <PersonalNotifications />
+          ) : page === "inboxReport" ? (
+            <InboxReport />
+          ) : page === "employees" ? (
+            <TeamAdmin user={user} />
           ) : page === "aiReport" ? (
             <AIReport />
           ) : (
@@ -796,7 +826,7 @@ createRoot(document.getElementById("root")!).render(
       }}
     >
       <QueryClientProvider client={client}>
-        <App />
+        {location.hash.startsWith("#access=") ? <AccessLink /> : <App />}
       </QueryClientProvider>
     </MantineProvider>
   </React.StrictMode>,

@@ -43,6 +43,7 @@ class User(Base):
     totp_counter: Mapped[int] = mapped_column(BigInteger, default=-1)
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    access_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -311,6 +312,7 @@ class AIDraft(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     final_text: Mapped[str] = mapped_column(Text, default="")
     reason: Mapped[str] = mapped_column(Text, default="")
+    rejection_category: Mapped[str] = mapped_column(String(20), default="")
     mode: Mapped[str] = mapped_column(String(20), default="draft")
     source_hash: Mapped[str] = mapped_column(String(64), default="")
     prompt_id: Mapped[str | None] = mapped_column(String(36))
@@ -373,3 +375,25 @@ class NotificationDelivery(Base):
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserAccessToken(Base):
+    __tablename__ = "user_access_tokens"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class QuickReply(Base):
+    __tablename__ = "quick_replies"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    title: Mapped[str] = mapped_column(String(100))
+    body: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class IntegrationHealth(Base):
+    __tablename__ = "integration_health"
+    name: Mapped[str] = mapped_column(String(40), primary_key=True)
+    details: Mapped[dict] = mapped_column(JSONB, default=dict)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

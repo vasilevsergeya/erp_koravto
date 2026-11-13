@@ -23,6 +23,7 @@ import {
 import "./inbox.css";
 import { ConversationTasks } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
+import { QuickReplyPicker } from "./QuickReplies";
 import { DraftPanel } from "./AI";
 import { taskLabel } from "./task-i18n";
 
@@ -52,8 +53,10 @@ const errorText = (error: unknown) =>
 export function Inbox({ user }: { user: User }) {
   const { t } = useTranslation("inbox");
   const query = useQueryClient();
-  const [selected, setSelected] = useState<string | null>(() =>
-    sessionStorage.getItem("crm-open-conversation") || new URLSearchParams(location.search).get("conversation"),
+  const [selected, setSelected] = useState<string | null>(
+    () =>
+      sessionStorage.getItem("crm-open-conversation") ||
+      new URLSearchParams(location.search).get("conversation"),
   );
   useEffect(() => {
     sessionStorage.removeItem("crm-open-conversation");
@@ -138,11 +141,22 @@ export function Inbox({ user }: { user: User }) {
   if (filter === "waiting_us" || filter === "closed")
     params.set("state", filter);
   if (filter === "mine") params.set("assignee", "me");
+  if (filter === "ai_draft") params.set("ai_draft", "true");
   if (filter === "human") params.set("needs_human", "true");
   const conversations = useQuery({
     queryKey: ["conversations", params.toString()],
     queryFn: () => api<Conversation[]>("/api/conversations?" + params),
     refetchInterval: 5000,
+  });
+  const integration = useQuery({
+    queryKey: ["integration-health"],
+    queryFn: () =>
+      api<{
+        checked_at: string | null;
+        warnings: { code: string; text: string }[];
+      }>("/api/integrations/health"),
+    refetchInterval: 60000,
+    retry: false,
   });
   const counters = useQuery({
     queryKey: ["conversation-counts"],
@@ -526,6 +540,16 @@ export function Inbox({ user }: { user: User }) {
             </Button>
           )}
         </div>
+        {integration.data?.warnings
+          .filter(
+            (w) =>
+              w.code !== "webhook_silent" && w.code !== "subscription_repaired",
+          )
+          .map((w) => (
+            <Alert key={w.code} color="red" m="xs">
+              {w.text}
+            </Alert>
+          ))}
         <TextInput
           aria-label={t("search")}
           placeholder={t("search")}
@@ -534,18 +558,21 @@ export function Inbox({ user }: { user: User }) {
           m="sm"
         />
         <div className="crm-filters">
-          {["all", "waiting_us", "mine", "human", "closed"].map((f) => (
-            <button
-              className={filter === f ? "active" : ""}
-              key={f}
-              onClick={() => {
-                setFilter(f);
-                setPage(0);
-              }}
-            >
-              {t(f)} <small>{counters.data?.[f] ?? 0}</small>
-            </button>
-          ))}
+          {["all", "waiting_us", "mine", "ai_draft", "human", "closed"].map(
+            (f) => (
+              <button
+                className={filter === f ? "active" : ""}
+                key={f}
+                onClick={() => {
+                  setFilter(f);
+                  setPage(0);
+                }}
+              >
+                {f === "ai_draft" ? t("v1:aiDraft") : t(f)}{" "}
+                <small>{counters.data?.[f] ?? 0}</small>
+              </button>
+            ),
+          )}
         </div>
         {conversations.isLoading && <Loader size="sm" m="md" />}
         {conversations.error && (
@@ -569,6 +596,20 @@ export function Inbox({ user }: { user: User }) {
                 <small>{time(item.updated_at)}</small>
               </div>
               <p>{item.last_message || t("attachment")}</p>
+              {item.has_ai_draft && (
+                <Badge size="xs" color="violet">
+                  {t("v1:aiDraft")}
+                </Badge>
+              )}
+              {item.assignee_id && (
+                <small
+                  title={
+                    team.data?.find((u) => u.id === item.assignee_id)?.name
+                  }
+                >
+                  {team.data?.find((u) => u.id === item.assignee_id)?.name}
+                </small>
+              )}
               {item.task_updated && (
                 <Badge size="xs" color="orange">
                   {taskLabel("taskUpdate")}
@@ -693,7 +734,35 @@ export function Inbox({ user }: { user: User }) {
                   {m.quoted_text && (
                     <blockquote dir="auto">{m.quoted_text}</blockquote>
                   )}
-                  {m.text && <div className="crm-message-text">{m.text}</div>}
+                  {m.content?.map_url && (
+                    <a
+                      href={m.content.map_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {t("v1:map")}
+                    </a>
+                  )}
+                  {m.kind === "vcard" && (
+                    <div>
+                      <b>{m.content?.name || t("v1:contact")}</b>
+                      {m.content?.phones?.map((p) => (
+                        <p key={p}>{p}</p>
+                      ))}
+                    </div>
+                  )}
+                  {m.text &&
+                    (m.kind !== "vcard" || !m.content?.phones?.length) && (
+                      <div className="crm-message-text">{m.text}</div>
+                    )}
+                  {!!m.history?.length && (
+                    <details>
+                      <summary>{t("v1:previousVersions")}</summary>
+                      {m.history.map((v, i) => (
+                        <p key={i}>{v.body}</p>
+                      ))}
+                    </details>
+                  )}
                   {m.attachment_url && (
                     <div className="crm-attachment">
                       {m.attachment_mime?.startsWith("image/") &&
@@ -768,6 +837,14 @@ export function Inbox({ user }: { user: User }) {
                       ×
                     </button>
                   </div>
+                )}
+                {c && (
+                  <QuickReplyPicker
+                    key={c.id}
+                    conversation={c}
+                    text={message}
+                    onInsert={setMessage}
+                  />
                 )}
                 <Textarea
                   aria-label={t("message")}

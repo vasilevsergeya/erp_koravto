@@ -4,12 +4,21 @@ import secrets
 import subprocess
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.core.db import SessionLocal
 from app.core.security import hash_password
 from app.core.settings import invalidate_settings, put_setting
-from app.models import Board, LoginSession, Setting, User, uid
+from app.models import (
+    ApprovedExample,
+    Board,
+    LoginSession,
+    Setting,
+    User,
+    UserAccessToken,
+    now,
+    uid,
+)
 
 BOARDS = {
     "Закупки": ["Новая", "В работе", "Заказано", "Получено", "Готово", "Отменено"],
@@ -57,8 +66,21 @@ def main():
             "--password-file", required=True, help="New file, mode 600; must not already exist"
         )
     commands.add_parser("seed-boards")
+    commands.add_parser(
+        "reindex-examples", help="Queue approved examples for embedding with the configured model"
+    )
     args = parser.parse_args()
     with SessionLocal() as db:
+        if args.command == "reindex-examples":
+            result = db.execute(
+                update(ApprovedExample)
+                .values(embedding=None, embedding_model="", next_attempt_at=now())
+                .returning(ApprovedExample.id)
+            )
+            queued = len(result.scalars().all())
+            db.commit()
+            print(f"Queued {queued} approved examples for reindexing")
+            return
         if args.command == "seed-boards":
             seed_boards(db)
             print("Default boards and webhook token initialized (idempotent)")
@@ -82,6 +104,8 @@ def main():
                 db.add(user)
             else:
                 db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+                db.execute(delete(UserAccessToken).where(UserAccessToken.user_id == user.id))
+                user.access_version += 1
             user.password_hash = hash_password(password)
             user.role = "admin"
             user.active = True

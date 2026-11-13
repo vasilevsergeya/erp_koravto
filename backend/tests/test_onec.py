@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import os
+import threading
 import unittest
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
@@ -269,3 +270,65 @@ class OneCAcceptance(unittest.TestCase):
             self.mock.assert_not_awaited()
         self.assertEqual(asyncio.run(refresh_customer(self.cid))["status"], "matched")
         self.mock.assert_awaited_once()
+
+    def test_parallel_cold_lookups_leave_event_loop_and_database_available(self):
+        ids = [uid() for _ in range(7)]
+        with SessionLocal() as db:
+            for ident in ids:
+                db.add(
+                    Conversation(
+                        id=ident, channel_id=uid(), chat_id="12025550123", phone="+12025550123"
+                    )
+                )
+            db.commit()
+        running = peak = 0
+        guard = threading.Lock()
+
+        async def slow_provider(phone):
+            nonlocal running, peak
+            with guard:
+                running += 1
+                peak = max(peak, running)
+            try:
+                await asyncio.sleep(0.15)
+                return [{"name": "Synthetic customer", "realizations": []}]
+            finally:
+                with guard:
+                    running -= 1
+
+        self.mock.side_effect = slow_provider
+
+        async def exercise():
+            ticks = 0
+            finished = False
+
+            async def heartbeat():
+                nonlocal ticks
+                while not finished:
+                    ticks += 1
+                    await asyncio.sleep(0.02)
+
+            pulse = asyncio.create_task(heartbeat())
+            try:
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app),
+                    base_url=config().public_url,
+                    cookies={COOKIE: self.raw},
+                ) as client:
+                    responses = await asyncio.wait_for(
+                        asyncio.gather(
+                            *(client.get("/api/conversations/" + i + "/customer") for i in ids)
+                        ),
+                        10,
+                    )
+                self.assertTrue(all(r.status_code == 200 for r in responses))
+                return [r.json() for r in responses], ticks
+            finally:
+                finished = True
+                await pulse
+
+        rows, ticks = asyncio.run(exercise())
+        self.assertTrue(all(r["status"] == "matched" for r in rows))
+        self.assertGreater(ticks, 3)
+        self.assertLessEqual(peak, 2)
+        self.assertEqual(self.mock.await_count, 7)

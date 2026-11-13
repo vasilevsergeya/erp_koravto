@@ -4,7 +4,9 @@ import asyncio
 import hashlib
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from functools import partial
 
 from sqlalchemy import or_, select, text, update
 
@@ -16,6 +18,8 @@ from app.models import Conversation, now
 log = logging.getLogger("crm")
 TTL = timedelta(minutes=15)
 ERROR_TTL = timedelta(minutes=1)
+# Keep slow 1C I/O off the API event loop and leave three DB slots for CRM traffic.
+_LOOKUP_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="crm-onec")
 
 
 def connection_settings(db):
@@ -57,6 +61,16 @@ def customer_snapshot(c, db):
 
 
 async def refresh_customer(conversation_id: str, *, force: bool = False):
+    return await asyncio.get_running_loop().run_in_executor(
+        _LOOKUP_EXECUTOR, partial(_run_refresh, conversation_id, force)
+    )
+
+
+def _run_refresh(conversation_id: str, force: bool):
+    return asyncio.run(_refresh_customer(conversation_id, force=force))
+
+
+async def _refresh_customer(conversation_id: str, *, force: bool = False):
     with SessionLocal() as db:
         c = db.get(Conversation, conversation_id)
         if c is None:

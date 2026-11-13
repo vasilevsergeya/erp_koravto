@@ -15,7 +15,7 @@ from app.core.security import (
     verify_password,
 )
 from app.core.settings import redis_client
-from app.models import AuditEvent, LoginSession, User, now
+from app.models import AuditEvent, LoginSession, User, UserAccessToken, now
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 COOKIE = "__Host-crm_session"
@@ -45,6 +45,9 @@ def auth_session(request: Request, db: Session = Depends(get_db)) -> tuple[Login
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         if not secrets.compare_digest(session.csrf_token, request.headers.get("X-CSRF-Token", "")):
             raise HTTPException(403, "Обновите страницу и повторите действие")
+    # Authentication must not hold a DB slot while an async endpoint waits on 1C/Wazzup.
+    # SessionLocal keeps loaded attributes after commit; routes can start a fresh transaction.
+    db.commit()
     return session, user
 
 
@@ -125,6 +128,7 @@ def change_password(body: PasswordInput, auth=Depends(auth_session), db: Session
     session, user = auth
     if verify_password(body.password, user.password_hash):
         raise HTTPException(400, "Новый пароль должен отличаться от временного")
+    db.execute(delete(UserAccessToken).where(UserAccessToken.user_id == user.id))
     user.password_hash = hash_password(body.password)
     user.must_change_password = False
     session.expires_at = now() + timedelta(hours=8)

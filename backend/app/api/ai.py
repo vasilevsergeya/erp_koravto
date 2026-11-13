@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -50,6 +51,7 @@ def describe(d):
             "body",
             "final_text",
             "reason",
+            "rejection_category",
             "mode",
             "policy",
             "tool_calls",
@@ -218,6 +220,7 @@ def regenerate(conversation_id: str, user=Depends(writer), db: Session = Depends
 class Decision(BaseModel):
     final_text: str | None = Field(None, min_length=1, max_length=10000)
     reason: str = Field("", max_length=1000)
+    category: Literal["", "incorrect", "irrelevant", "tone", "other"] = ""
 
 
 @router.post("/drafts/{draft_id}/send")
@@ -295,10 +298,24 @@ def reject(draft_id: str, body: Decision, user=Depends(writer), db: Session = De
         return describe(row)
     if row.decision != "pending":
         raise HTTPException(409, "Решение уже принято")
-    if not body.reason.strip():
+    if (not body.category or body.category == "other") and not body.reason.strip():
         raise HTTPException(400, "Укажите причину отклонения")
     row.decision = "rejected"
-    row.reason = body.reason
+    row.reason = body.reason.strip()
+    row.rejection_category = body.category or "other"
+    db.add(
+        Message(
+            conversation_id=row.conversation_id,
+            channel_id=row.conversation_id,
+            external_id=str(uuid.uuid4()),
+            direction="out",
+            author_type="system",
+            body="AI-черновик отклонён: " + row.rejection_category,
+            status="system",
+            is_private_note=True,
+            author_id=user.id,
+        )
+    )
     row.decided_by = user.id
     row.decided_at = now()
     row.auto_at = None

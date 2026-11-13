@@ -13,6 +13,8 @@ import {
   Textarea,
   TextInput,
 } from "@mantine/core";
+import { useTranslation } from "react-i18next";
+import "./v1-i18n";
 import { api } from "./api";
 import "./ai.css";
 
@@ -96,6 +98,7 @@ export function DraftPanel({
   conversationId: string;
   canWrite: boolean;
 }) {
+  const { t } = useTranslation("v1");
   const query = useQueryClient();
   const data = useQuery({
     queryKey: ["ai-draft", conversationId],
@@ -108,6 +111,7 @@ export function DraftPanel({
   const [editing, setEditing] = useState<string | null>(null),
     [answer, setAnswer] = useState(""),
     [reason, setReason] = useState(""),
+    [category, setCategory] = useState<string | null>(null),
     [rejecting, setRejecting] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -169,6 +173,25 @@ export function DraftPanel({
               {reasons[d.reason] || d.reason}
             </small>
           )}
+        </details>
+      )}
+      {!!d?.tool_calls.length && (
+        <details>
+          <summary>{t("sources")}</summary>
+          {d.tool_calls.map((call, i) => (
+            <div key={i}>
+              <b>{call.name}</b>
+              <pre
+                style={{
+                  whiteSpace: "pre-wrap",
+                  overflowWrap: "anywhere",
+                  fontSize: 12,
+                }}
+              >
+                {JSON.stringify(call.result, null, 2)}
+              </pre>
+            </div>
+          ))}
         </details>
       )}
       {canWrite &&
@@ -245,18 +268,31 @@ export function DraftPanel({
             )}
             {rejecting && (
               <div className="ai-edit">
+                <Select
+                  label={t("rejectReason")}
+                  value={category}
+                  onChange={setCategory}
+                  data={["incorrect", "irrelevant", "tone", "other"].map(
+                    (value) => ({ value, label: t(value) }),
+                  )}
+                />
                 <TextInput
-                  label="Причина отклонения"
+                  label={t("comment")}
                   value={reason}
                   onChange={(e) => setReason(e.currentTarget.value)}
                 />
                 <Button
                   size="xs"
-                  disabled={!reason.trim()}
+                  disabled={
+                    !category || (category === "other" && !reason.trim())
+                  }
                   loading={busy}
                   onClick={async () => {
                     if (
-                      await act("/api/drafts/" + d.id + "/reject", { reason })
+                      await act("/api/drafts/" + d.id + "/reject", {
+                        reason,
+                        category,
+                      })
                     ) {
                       setRejecting(false);
                       setReason("");
@@ -768,11 +804,16 @@ export function AIReport() {
           <Table>
             <Table.Thead>
               <Table.Tr>
-                {["Неделя", "Тип вопроса", "Состояние", "Решение", "Количество", "Доля"].map(
-                  (x) => (
-                    <Table.Th key={x}>{x}</Table.Th>
-                  ),
-                )}
+                {[
+                  "Неделя",
+                  "Тип вопроса",
+                  "Состояние",
+                  "Решение",
+                  "Количество",
+                  "Доля",
+                ].map((x) => (
+                  <Table.Th key={x}>{x}</Table.Th>
+                ))}
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>

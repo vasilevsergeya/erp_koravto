@@ -150,8 +150,14 @@ async def process_webhook(ctx, event_id: str):
                     deleted=bool(item.get("isDeleted")),
                 )
                 content_uri = item.get("contentUri")
+                # Coordinate payloads are links/text, not downloadable files.
+                if message.kind == "geo" and content_uri:
+                    message.body = message.body or str(content_uri)[:10000]
+                    content_uri = None
                 if content_uri:
                     data = await download_attachment(str(content_uri))
+                    if message.kind == "vcard" and not message.body:
+                        message.body = data[:100000].decode("utf-8", errors="replace")
                     key, backend = await asyncio.to_thread(save_file, data)
                     parsed_url = urlsplit(str(content_uri))
                     filename = (
@@ -320,12 +326,18 @@ async def recover_pending(ctx):
 
 
 async def startup(ctx):
+    from app.services.integration_monitor import monitor_loop
+
+    ctx["monitor_task"] = asyncio.create_task(monitor_loop())
     configure_logging("worker")
     ctx["recovery_task"] = asyncio.create_task(recover_pending(ctx))
     ctx["onec_task"] = asyncio.create_task(refresh_customers_loop())
 
 
 async def shutdown(ctx):
+    ctx["monitor_task"].cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await ctx["monitor_task"]
     ctx["onec_task"].cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await ctx["onec_task"]
