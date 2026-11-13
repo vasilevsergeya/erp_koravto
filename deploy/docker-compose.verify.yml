@@ -1,0 +1,40 @@
+name: koravto-tasks-verify
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    mem_limit: 160m
+    environment:
+      POSTGRES_USER: verify
+      POSTGRES_PASSWORD: verify-test-only
+      POSTGRES_DB: verify
+    tmpfs: ["/var/lib/postgresql/data"]
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=25"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verify -d verify"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    networks: [verify]
+  redis:
+    image: redis:7.4-alpine
+    mem_limit: 64m
+    networks: [verify]
+  verify:
+    image: koravto-crm-api:tasks-check-20261113
+    mem_limit: 512m
+    memswap_limit: 1g
+    environment:
+      PUBLIC_URL: https://crm-test.invalid
+      DATABASE_URL: postgresql+psycopg://verify:verify-test-only@postgres/verify
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: "0101010101010101010101010101010101010101010101010101010101010101"
+      MASTER_ENCRYPTION_KEY: "0202020202020202020202020202020202020202020202020202020202020202"
+      FILES_BACKEND: local
+    command: ["python", "-m", "app.selftest"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+    networks: [verify]
+networks:
+  verify:
+    internal: true

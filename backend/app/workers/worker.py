@@ -235,8 +235,11 @@ async def recover_pending(ctx):
         try:
             await ctx["redis"].set("crm:worker:heartbeat", str(time.time()), ex=45)
             if time.time() - last_task_reminders > 60:
-                await asyncio.to_thread(overdue_reminders)
                 last_task_reminders = time.time()
+                try:
+                    await asyncio.to_thread(overdue_reminders)
+                except Exception as error:
+                    log.warning("task.reminder_failed", extra={"error_type": type(error).__name__})
             with SessionLocal() as db:
                 pending = db.scalars(
                     select(WebhookEvent.id)

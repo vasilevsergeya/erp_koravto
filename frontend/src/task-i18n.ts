@@ -1,6 +1,8 @@
 import i18n from "./i18n";
 const ru = {
   tasks: "Задачи",
+  dateOnly: "Срок без точного времени (до конца дня)",
+  due_date_only: "Только дата",
   create: "Новая задача",
   title: "Заголовок",
   description: "Описание",

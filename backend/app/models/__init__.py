@@ -194,6 +194,7 @@ class Task(Base):
     author_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     assignee_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    due_date_only: Mapped[bool] = mapped_column(Boolean, default=False)
     conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     order_no: Mapped[str] = mapped_column(String(100), default="")
     part_no: Mapped[str] = mapped_column(String(100), default="")

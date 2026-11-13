@@ -13,8 +13,8 @@ export async function api<T>(path:string,method='GET',body?:unknown):Promise<T>{
 }
 
 
-export async function uploadFile(file:File):Promise<{id:string;filename:string;size:number}>{
+export async function uploadFile(file:File,path='/api/uploads'):Promise<{id:string;filename:string;size:number}>{
   const body=new FormData();body.append('file',file);
-  const response=await fetch('/api/uploads',{method:'POST',credentials:'same-origin',headers:{'X-CSRF-Token':csrf},body});
+  const response=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'X-CSRF-Token':csrf},body});
   const data=await response.json();if(!response.ok)throw new ApiError(data.detail||'Ошибка загрузки',response.status);return data;
 }

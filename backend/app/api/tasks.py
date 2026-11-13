@@ -6,12 +6,13 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import case, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.api.auth import admin_user, current_user
+from app.api.inbox import upload
 from app.core.db import get_db
 from app.core.security import file_signer
 from app.core.settings import get_setting
@@ -34,6 +35,13 @@ from app.services.tasks import history, notify, publish_tasks, system_note
 router = APIRouter(prefix="/api", tags=["tasks"])
 
 
+@router.post("/task-uploads", status_code=201)
+def task_upload(
+    file: UploadFile = File(), user=Depends(current_user), db: Session = Depends(get_db)
+):
+    return upload(file, user, db)
+
+
 class Input(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -47,6 +55,7 @@ class TaskFields(Input):
     priority: Literal["low", "normal", "high", "urgent"] = "normal"
     assignee_id: str | None = None
     due_at: datetime | None = None
+    due_date_only: bool = False
     conversation_id: str | None = None
     order_no: str = Field("", max_length=100)
     part_no: str = Field("", max_length=100)
@@ -84,6 +93,7 @@ class TaskPatch(Input):
     priority: str | None = None
     assignee_id: str | None = None
     due_at: datetime | None = None
+    due_date_only: bool | None = None
     conversation_id: str | None = None
     order_no: str | None = None
     part_no: str | None = None

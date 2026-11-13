@@ -57,6 +57,7 @@ def upgrade():
         sa.Column("author_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("assignee_id", sa.String(36), sa.ForeignKey("users.id")),
         sa.Column("due_at", sa.DateTime(timezone=True)),
+        sa.Column("due_date_only", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("conversation_id", sa.String(36), sa.ForeignKey("conversations.id")),
         sa.Column("order_no", sa.String(100), nullable=False, server_default=""),
         sa.Column("part_no", sa.String(100), nullable=False, server_default=""),

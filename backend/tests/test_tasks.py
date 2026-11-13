@@ -281,7 +281,7 @@ class TasksAcceptance(unittest.TestCase):
 
     def test_staff_upload_and_file_ownership(self):
         file = self.staff_client.post(
-            "/api/uploads", files={"file": ("proof.txt", b"Acceptance proof", "text/plain")}
+            "/api/task-uploads", files={"file": ("proof.txt", b"Acceptance proof", "text/plain")}
         )
         self.assertEqual(file.status_code, 201)
         task, _ = self.create(client=self.staff_client, attachment_ids=[file.json()["id"]])

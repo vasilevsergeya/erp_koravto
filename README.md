@@ -11,10 +11,12 @@ Outbound jobs persist in PostgreSQL before sending; HTTP retries reuse a client 
 Provider timeouts are retried only inside Wazzup's 60-second deduplication window;
 unknown delivery after that window requires an explicit duplicate-risk confirmation.
 
-The complete task workflow, AI responses, unified customer management, live 1C integration,
-SMTP delivery and historical Wazzup import remain subsequent development. Boards are still
-read-only. Saving credentials does not enable those unfinished integrations. This release
-is an Inbox increment, not acceptance of the full CRM v1 specification.
+Tasks are operational: editable boards/statuses/types, Kanban and list, linked chat tasks,
+comments, watchers, attachments, immutable history, in-app notifications and assignment reports.
+1C customer names and realization numbers are connected through the deployed phone lookup.
+AI responses, unified customer identities/merge, detailed 1C order/stock endpoints and
+SMTP/Telegram notification delivery remain subsequent development. Historical Wazzup import
+requires an actual provider export. This release is not acceptance of the full CRM v1 specification.
 
 ## Development
 
@@ -45,3 +47,47 @@ Inbox использует сервис `koravto-1c` (контракт `afbf86b`
 Один найденный клиент даёт имя в списке и заголовке чата. Несколько совпадений отображаются отдельно, без автоматического выбора: сервис ищет последние шесть цифр в телефонах 1С и не отдаёт уникальный ID контрагента. Номера заказов — строки `realizations` (НомерВКаналеПродаж либо номер реализации 1С); даты, суммы и статусы этот сервис не отдаёт. Порядок, ведущие нули, одинаковые имена и повторяющиеся номера документов сохраняются. Ручные имя чата и привязки заказов не изменяются. Поиск Inbox учитывает сохранённые имена и номера из 1С.
 
 Миграция `0004` добавляет только поля кэша. Недоступность 1С не блокирует переписку. Изменение телефона/настроек подключения скрывает старый результат до нового поиска. Учётные данные, тела ошибок и телефоны не попадают в журналы интеграции.
+
+## Задачи и поручения — 13.11.2026
+
+В меню «Задачи» доступны канбан, список и отчёт «Поручения». Быстрое создание —
+заголовок, доска и исполнитель; из карточки чата дополнительно переносятся диалог и
+первый ручной номер заказа. Номер T-1001 выдаёт последовательность PostgreSQL; повтор
+запроса создания с тем же UUID не дублирует задачу. Карточка открывается по /tasks/T-1001.
+
+Описание поддерживает Markdown без HTML. Есть комментарии с упоминаниями сотрудников,
+наблюдатели, метки и вложения до 10 МиБ. Автор неизменяем; изменение задачи требует
+её текущую версию, чтобы параллельная правка не затёрла данные. Завершение и повторное
+открытие фиксируются в истории. Системные записи в связанном чате клиенту не отправляются.
+
+Администратор настраивает доски, порядок, цвета и завершающие статусы, архивирует доски,
+редактирует и отключает типы. При удалении статуса обязательно выбрать другой статус
+той же доски: задачи переносятся с историей и уведомлениями. Переключить завершающий
+признак занятого статуса нельзя — нужно создать новый и перенести задачи.
+
+Уведомления сейчас **внутри ERP**, в колокольчике: назначение, комментарии, изменение
+срока/статуса, завершение и ежедневная просрочка. Настройки tasks.timezone,
+tasks.reminder_hour и tasks.workdays определяют час и рабочие дни напоминаний.
+На задачу и получателя выдаётся не более одного напоминания за местный день; повтор
+после перезапуска безопасен. Email/Telegram-доставка и личные настройки каналов ещё
+не подключены. Полноценная общая карточка клиента с несколькими телефонами и слиянием
+остаётся следующим блоком; пока задачи связаны с существующим диалогом.
+
+Отчёт агрегирует задачи, созданные в выбранном периоде: автор × исполнитель, всего /
+открыто / завершено / просрочено, среднее время до текущего завершения. Администратор
+видит всех, остальные — только поручения, где они автор или исполнитель. Клик
+открывает точный фильтр списка. CSV экранирует формулы, чтобы пользовательский текст
+не выполнялся в таблицах. Время хранится в UTC и показывается в настроенном часовом поясе.
+
+Полная автоматическая проверка запускается в отдельной Docker-сети без production .env:
+
+```sh
+docker build -t koravto-crm-api:tasks-check-20261113 backend
+docker compose -f deploy/docker-compose.verify.yml up --abort-on-container-exit --exit-code-from verify
+docker compose -f deploy/docker-compose.verify.yml down
+```
+
+Тестовые PostgreSQL и Redis не публикуют порты, сеть internal, PostgreSQL хранится в
+tmpfs. Учётные данные в этом файле — исключительно тестовые, рабочие секреты не нужны.
+Миграция 0005 добавляет таблицы задач/уведомлений, постоянные ID существующим статусам
+и маркер обновления по задаче для диалогов. Содержимое переписки и файлов не меняется.

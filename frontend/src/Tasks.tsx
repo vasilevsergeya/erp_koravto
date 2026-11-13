@@ -59,6 +59,7 @@ type Task = {
   assignee_id: string | null;
   assignee_name: string;
   due_at: string | null;
+  due_date_only: boolean;
   conversation_id: string | null;
   customer_name: string;
   order_no: string;
@@ -128,12 +129,12 @@ function useCatalogs() {
     }),
   };
 }
-const dateText = (v: string | null, zone = "Asia/Seoul") =>
+const dateText = (v: string | null, zone = "Asia/Seoul", dateOnly = false) =>
   v
     ? new Intl.DateTimeFormat("ru-RU", {
         timeZone: zone,
         dateStyle: "short",
-        timeStyle: "short",
+        ...(dateOnly ? {} : { timeStyle: "short" as const }),
       }).format(new Date(v))
     : "—";
 function wallTime(value: string, zone: string) {
@@ -195,9 +196,14 @@ function TaskForm({
   const [typeId, setType] = useState(task?.type_id || "");
   const [priority, setPriority] = useState(task?.priority || "normal");
   const [assignee, setAssignee] = useState(task?.assignee_id || null);
+  const [dateOnly, setDateOnly] = useState(task?.due_date_only ?? true);
   const [due, setDue] = useState(
     task?.due_at ? wallTime(task.due_at, zone) : "",
   );
+  useEffect(() => {
+    if (config.data)
+      setDue(task?.due_at ? wallTime(task.due_at, config.data.timezone) : "");
+  }, [task?.id, config.data?.timezone]);
   const [order, setOrder] = useState(
     task?.order_no || conversation?.order_numbers[0] || "",
   );
@@ -223,7 +229,7 @@ function TaskForm({
       let files = attachments;
       if (file) {
         if (file.size > 10 * 1024 * 1024) throw new Error(t("fileLimit"));
-        const result = await uploadFile(file);
+        const result = await uploadFile(file, "/api/task-uploads");
         files = [
           ...files,
           { id: result.id, name: result.filename, url: "", size: result.size },
@@ -239,7 +245,14 @@ function TaskForm({
         type_id: kind,
         priority,
         assignee_id: assignee,
-        due_at: due ? toIso(due, zone) : null,
+        due_at: due
+          ? dateOnly
+            ? new Date(
+                Date.parse(toIso(due.slice(0, 10) + "T23:59", zone)) + 59999,
+              ).toISOString()
+            : toIso(due, zone)
+          : null,
+        due_date_only: dateOnly,
         conversation_id: task?.conversation_id || conversation?.id || null,
         order_no: order,
         part_no: part,
@@ -338,12 +351,25 @@ function TaskForm({
           placeholder={t("unassigned")}
         />
         <TextInput
-          type="datetime-local"
+          type={dateOnly ? "date" : "datetime-local"}
           label={t("due") + " · " + zone}
-          value={due}
-          onChange={(e) => setDue(e.currentTarget.value)}
+          value={dateOnly ? due.slice(0, 10) : due}
+          onChange={(e) =>
+            setDue(
+              e.currentTarget.value
+                ? dateOnly
+                  ? e.currentTarget.value + "T23:59"
+                  : e.currentTarget.value
+                : "",
+            )
+          }
         />
       </div>
+      <Checkbox
+        label={t("dateOnly")}
+        checked={dateOnly}
+        onChange={(e) => setDateOnly(e.currentTarget.checked)}
+      />
       <MultiSelect
         label={t("watchers")}
         data={options(team.data)}
@@ -570,7 +596,7 @@ export function TaskDialogs() {
                   [t("type"), task.type_name],
                   [t("author"), task.author_name],
                   [t("assignee"), task.assignee_name],
-                  [t("due"), dateText(task.due_at, zone)],
+                  [t("due"), dateText(task.due_at, zone, task.due_date_only)],
                   [t("createdAt"), dateText(task.created_at, zone)],
                   [t("completedAt"), dateText(task.completed_at, zone)],
                   [t("order"), task.order_no],
@@ -988,7 +1014,7 @@ export function TasksPage({ user }: { user: User }) {
   const { boards, types, team, config } = useCatalogs();
   const [mode, setMode] = useState("kanban");
   const [filters, setFilters] = useState<Record<string, string>>({
-    view: "open",
+    view: "all",
   });
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
@@ -1016,7 +1042,11 @@ export function TasksPage({ user }: { user: User }) {
     enabled: mode !== "report",
   });
   const change = (key: string, value: string | null) => {
-    setFilters((f) => ({ ...f, [key]: value || "" }));
+    setFilters((f) => ({
+      ...f,
+      [key]: value || "",
+      ...(key === "board_id" ? { status_id: "" } : {}),
+    }));
     setPage(0);
   };
   async function move(task: Task, status: string) {
@@ -1165,7 +1195,7 @@ export function TasksPage({ user }: { user: User }) {
             <Button
               variant="subtle"
               onClick={() => {
-                setFilters({ view: "open" });
+                setFilters({ view: "all" });
                 setSearch("");
                 setPage(0);
               }}
@@ -1237,7 +1267,7 @@ export function TasksPage({ user }: { user: User }) {
                           )}
                           <span>{task.assignee_name}</span>
                           <span className={task.overdue ? "task-overdue" : ""}>
-                            {dateText(task.due_at, zone)}
+                            {dateText(task.due_at, zone, task.due_date_only)}
                           </span>
                         </button>
                         <Select
@@ -1296,7 +1326,7 @@ export function TasksPage({ user }: { user: User }) {
                       </Table.Td>
                       <Table.Td>{task.assignee_name}</Table.Td>
                       <Table.Td className={task.overdue ? "task-overdue" : ""}>
-                        {dateText(task.due_at, zone)}
+                        {dateText(task.due_at, zone, task.due_date_only)}
                       </Table.Td>
                       <Table.Td>{task.customer_name || "—"}</Table.Td>
                     </Table.Tr>

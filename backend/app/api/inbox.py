@@ -496,7 +496,7 @@ def team(user=Depends(current_user), db: Session = Depends(get_db)):
 
 
 @router.post("/uploads", status_code=201)
-def upload(file: UploadFile = File(), user=Depends(current_user), db: Session = Depends(get_db)):
+def upload(file: UploadFile = File(), user=Depends(writer), db: Session = Depends(get_db)):
     content = file.file.read(MAX_FILE_SIZE + 1)
     if not content or len(content) > MAX_FILE_SIZE:
         raise HTTPException(400, "Файл должен быть непустым и не больше 10 МБ")
