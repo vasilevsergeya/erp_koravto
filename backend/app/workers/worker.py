@@ -23,14 +23,17 @@ from app.models import (
     DeliveryReceipt,
     LoginSession,
     Message,
+    MessageAction,
     WebhookEvent,
     now,
 )
 from app.services.ai import queue_inbound, supersede
 from app.services.customers import attach_conversation, structure_lock
+from app.services.message_actions import process_action, recover_actions
 from app.services.notifications import notify_inbound
 from app.services.onec_customers import refresh_customers_loop
 from app.services.outbox import deliver_message, status_forward
+from app.services.response_state import acknowledge_reply, refresh_unanswered
 from app.services.storage import download_attachment, save_file
 from app.services.tasks import overdue_reminders
 
@@ -88,6 +91,14 @@ async def process_webhook(ctx, event_id: str):
                     text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                     {"key": item["channelId"] + ":" + item["chatId"]},
                 )
+                db.scalar(
+                    select(Conversation)
+                    .where(
+                        Conversation.channel_id == item["channelId"],
+                        Conversation.chat_id == item["chatId"],
+                    )
+                    .with_for_update()
+                )
                 existing = db.scalar(
                     select(Message).where(
                         Message.channel_id == item["channelId"],
@@ -98,16 +109,32 @@ async def process_webhook(ctx, event_id: str):
                     existing.status = advance_status(
                         existing.status, str(item.get("status", existing.status))
                     )
-                    if item.get("isEdited") and item.get("text") is not None:
-                        existing.history = [
-                            *existing.history,
-                            {"body": existing.body, "at": now().isoformat()},
-                        ]
-                        existing.body = str(item["text"])[:100000]
+                    editing = db.scalar(
+                        select(MessageAction.id).where(
+                            MessageAction.message_id == existing.id,
+                            MessageAction.kind == "edit",
+                            MessageAction.state.in_(["processing", "uncertain"]),
+                        )
+                    )
+                    if item.get("isEdited") and item.get("text") is not None and not editing:
+                        edited_text = str(item["text"])[:100000]
+                        if edited_text not in (existing.body, existing.delivery_body):
+                            existing.history = [
+                                *existing.history,
+                                {"body": existing.body, "at": now().isoformat()},
+                            ]
+                            existing.body = edited_text
+                            existing.delivery_body = None
+                            existing.version += 1
                         existing.edited = True
                     if existing.status == "error":
                         existing.error_code = safe_error(item)
-                    existing.deleted = existing.deleted or bool(item.get("isDeleted"))
+                    if item.get("isDeleted") and not existing.deleted:
+                        existing.deleted = True
+                        existing.version += 1
+                    existing_conversation = db.get(Conversation, existing.conversation_id)
+                    acknowledge_reply(db, existing_conversation, existing)
+                    refresh_unanswered(db, existing_conversation)
                     if existing.direction == "in" and (
                         item.get("isEdited") or item.get("isDeleted")
                     ):
@@ -190,20 +217,31 @@ async def process_webhook(ctx, event_id: str):
                 )
                 message.error_code = safe_error(item) if message.status == "error" else None
                 if inbound:
-                    conversation.unread_count += 1
+                    conversation.inbound_seq += 1
+                    message.inbound_seq = conversation.inbound_seq
                 db.add(message)
                 db.flush()
                 if inbound:
                     queue_inbound(db, conversation, message)
                     notify_inbound(db, conversation, message)
                 else:
+                    sending = db.scalar(
+                        select(Message.id)
+                        .where(
+                            Message.conversation_id == conversation.id,
+                            Message.id != message.id,
+                            Message.status.in_(["sending", "accepted", "retry", "uncertain"]),
+                            Message.author_type.in_(["user", "ai"]),
+                        )
+                        .limit(1)
+                    )
+                    if sending:
+                        message.reply_through_seq = 0
                     supersede(db, conversation.id, "manual_reply")
-                if (
-                    timestamp >= conversation.updated_at
-                    or conversation.updated_at > now() - timedelta(seconds=2)
-                ):
-                    conversation.state = "waiting_us" if inbound else "waiting_customer"
+                if timestamp >= conversation.updated_at:
                     conversation.updated_at = timestamp
+                acknowledge_reply(db, conversation, message)
+                refresh_unanswered(db, conversation)
                 changed.add(conversation.id)
             db.flush()
             for item in statuses:
@@ -223,11 +261,17 @@ async def process_webhook(ctx, event_id: str):
                     query = query.where(Message.channel_id == item["channelId"])
                 matching = db.scalars(query).all()
                 for message in matching:
+                    status_conversation = db.scalar(
+                        select(Conversation)
+                        .where(Conversation.id == message.conversation_id)
+                        .with_for_update()
+                    )
                     message.status = advance_status(
                         message.status, str(item.get("status", message.status))
                     )
                     if message.status == "error":
                         message.error_code = safe_error(item)
+                    acknowledge_reply(db, status_conversation, message)
                     changed.add(message.conversation_id)
             event.state = "processed"
             event.attempts += 1
@@ -296,6 +340,7 @@ async def recover_pending(ctx):
                     .order_by(Message.channel_id, Message.created_at, Message.id)
                     .limit(20)
                 ).all()
+                actions = recover_actions(db)
                 db.commit()
                 if time.time() - last_cleanup > 3600:
                     days = get_setting(db, "inbox.auto_close_days", 14)
@@ -310,6 +355,10 @@ async def recover_pending(ctx):
                     db.execute(delete(LoginSession).where(LoginSession.expires_at < now()))
                     db.commit()
                     last_cleanup = time.time()
+            for action_id in actions:
+                await ctx["redis"].enqueue_job(
+                    "process_action", action_id, _job_id="message-action:" + action_id
+                )
             for event_id in pending:
                 await ctx["redis"].enqueue_job(
                     "process_webhook", event_id, _job_id="webhook:" + event_id
@@ -348,7 +397,7 @@ async def shutdown(ctx):
 
 
 class WorkerSettings:
-    functions = [process_webhook, deliver_message]
+    functions = [process_webhook, deliver_message, process_action]
     redis_settings = RedisSettings.from_dsn(config().redis_url)
     on_startup = startup
     on_shutdown = shutdown

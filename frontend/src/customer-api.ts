@@ -5,6 +5,10 @@ export type CustomerLite = {
   display_name: string;
   name_manual: boolean;
   language: string;
+  translate_incoming: boolean;
+  translate_outgoing: boolean;
+  translation_client_language: string;
+  translation_manager_language: string;
   segment: string;
   country: string;
   tags: string[];

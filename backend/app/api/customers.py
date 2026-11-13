@@ -44,6 +44,10 @@ class Input(BaseModel):
 class Profile(Input):
     name: str = Field("", max_length=200)
     language: str = Field("", max_length=20, pattern=r"^$|^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$")
+    translate_incoming: bool = False
+    translate_outgoing: bool = False
+    translation_client_language: str = Field("en", pattern=r"^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$")
+    translation_manager_language: str = Field("ru", pattern=r"^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$")
     segment: Literal["", "retail", "small_wholesale", "wholesale"] = ""
     country: str = Field("", pattern=r"^$|^[A-Z]{2}$")
     tags: list[str] = Field(default_factory=list, max_length=50)

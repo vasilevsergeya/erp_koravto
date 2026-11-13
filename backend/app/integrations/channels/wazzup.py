@@ -76,6 +76,32 @@ class WazzupAdapter:
             {k: item.get(k) for k in ("channelId", "transport", "state", "name")} for item in data
         ]
 
+    async def change_message(self, external_id: str, *, text: str | None = None):
+        import re
+        from urllib.parse import quote
+
+        if not self.api_key:
+            raise IntegrationError("key_not_configured")
+        try:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+                response = await client.request(
+                    "DELETE" if text is None else "PATCH",
+                    "https://api.wazzup24.com/v3/message/" + quote(external_id, safe=""),
+                    json=None if text is None else {"text": text},
+                    headers={"Authorization": "Bearer " + self.api_key},
+                )
+        except httpx.HTTPError:
+            raise IntegrationError("change_unknown", ambiguous=True) from None
+        if not response.is_success:
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            code = data.get("error", "") if isinstance(data, dict) else ""
+            if not isinstance(code, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{1,99}", code):
+                code = "http_" + str(response.status_code)
+            raise IntegrationError(code, ambiguous=response.status_code >= 500)
+
     async def subscribe_webhooks(self, url: str):
         return await self.request(
             "PATCH",

@@ -1,4 +1,4 @@
-name: koravto-v1-verify
+name: koravto-dialog-verify
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -20,7 +20,7 @@ services:
     mem_limit: 64m
     networks: [verify]
   verify:
-    image: koravto-crm-api:v1-check-20261113
+    image: koravto-crm-api:dialog-check-20261113
     mem_limit: 512m
     memswap_limit: 1g
     environment:

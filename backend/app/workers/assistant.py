@@ -12,13 +12,16 @@ from app.services.notifications import notification_loop
 
 
 async def startup(ctx):
+    from app.services.translations import translation_loop
+
     configure_logging("assistant")
+    ctx["translation_loop"] = asyncio.create_task(translation_loop())
     ctx["ai_recovery"] = asyncio.create_task(recovery(ctx))
     ctx["notification_loop"] = asyncio.create_task(notification_loop())
 
 
 async def shutdown(ctx):
-    for key in ("ai_recovery", "notification_loop"):
+    for key in ("ai_recovery", "notification_loop", "translation_loop"):
         ctx[key].cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await ctx[key]

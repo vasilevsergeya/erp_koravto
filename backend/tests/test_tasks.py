@@ -167,6 +167,8 @@ class TasksAcceptance(unittest.TestCase):
                 select(Message).where(Message.conversation_id == self.conversation)
             ).all()
             self.assertEqual(len(messages), 2)
+            self.assertTrue(all(m.task_id == task["id"] for m in messages))
+            self.assertIn("Исполнитель:", messages[0].body)
             self.assertTrue(
                 all(m.status == "internal" and m.direction == "system" for m in messages)
             )

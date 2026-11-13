@@ -24,6 +24,9 @@ from app.models import (
     Customer,
     CustomerIdentity,
     Message,
+    MessageAction,
+    MessageHidden,
+    Task,
     User,
     now,
 )
@@ -65,7 +68,27 @@ def pending_draft():
     )
 
 
-def describe_conversation(c, db):
+def message_activity():
+    return case(
+        (Message.direction == "out", func.coalesce(Message.sent_at, Message.created_at)),
+        else_=Message.created_at,
+    )
+
+
+def last_activity():
+    return (
+        select(func.max(message_activity()))
+        .where(
+            Message.conversation_id == Conversation.id,
+            Message.is_private_note.is_(False),
+            Message.author_type != "system",
+        )
+        .correlate(Conversation)
+        .scalar_subquery()
+    )
+
+
+def describe_conversation(c, db, user_id=None):
     onec = customer_snapshot(c, db)
     customer_name = onec["clients"][0]["name"] if len(onec["clients"]) == 1 else ""
     profile = db.get(Customer, c.customer_id) if c.customer_id else None
@@ -73,8 +96,15 @@ def describe_conversation(c, db):
         customer_name = profile.name
     last = db.scalar(
         select(Message)
-        .where(Message.conversation_id == c.id)
-        .order_by(Message.created_at.desc(), Message.id.desc())
+        .where(
+            Message.conversation_id == c.id,
+            Message.is_private_note.is_(False),
+            Message.author_type != "system",
+            ~select(MessageHidden.message_id)
+            .where(MessageHidden.message_id == Message.id, MessageHidden.user_id == user_id)
+            .exists(),
+        )
+        .order_by(message_activity().desc(), Message.id.desc())
         .limit(1)
     )
     return {
@@ -88,7 +118,19 @@ def describe_conversation(c, db):
         "chat_type": c.chat_type,
         "channel_id": c.channel_id,
         "state": c.state,
-        "updated_at": c.updated_at,
+        "updated_at": (last.sent_at or last.created_at) if last else c.created_at,
+        "inbound_seq": c.inbound_seq,
+        "translation": {
+            k: getattr(profile, k)
+            for k in (
+                "translate_incoming",
+                "translate_outgoing",
+                "translation_client_language",
+                "translation_manager_language",
+            )
+        }
+        if profile
+        else None,
         "assignee_id": c.assignee_id,
         "needs_human": c.needs_human,
         "ai_mode": c.ai_mode,
@@ -100,36 +142,81 @@ def describe_conversation(c, db):
                 select(pending_draft()).select_from(Conversation).where(Conversation.id == c.id)
             )
         ),
-        "last_message": last.body[:120] if last else "",
+        "last_message": ("Сообщение удалено" if last.deleted else last.body[:120]) if last else "",
         "last_status": last.status if last else "",
     }
 
 
-def describe_message(m, db):
+def describe_message(m, db, user_id=None):
+    from app.services.translations import languages, translation_row
+
+    conversation = db.get(Conversation, m.conversation_id)
+    profile = (
+        db.get(Customer, conversation.customer_id)
+        if conversation and conversation.customer_id
+        else None
+    )
+    pair = languages(m, profile)
+    translated = translation_row(db, m, pair)
+    action = db.scalar(
+        select(MessageAction)
+        .where(MessageAction.message_id == m.id)
+        .order_by(MessageAction.created_at.desc())
+        .limit(1)
+    )
+    quoted = db.get(Message, m.quoted_message_id) if m.quoted_message_id else None
+    quote_hidden = bool(
+        quoted and (quoted.deleted or (user_id and db.get(MessageHidden, (user_id, quoted.id))))
+    )
     author = db.get(User, m.author_id) if m.author_id else None
     attachment = db.get(Attachment, m.attachment_id) if m.attachment_id else None
+    task = db.get(Task, m.task_id) if m.task_id else None
     return {
         "id": m.id,
         "direction": m.direction,
         "author_type": m.author_type,
         "author_name": author.email if author else None,
-        "text": m.body,
+        "text": "" if m.deleted else m.body,
+        "version": m.version,
+        "author_id": m.author_id,
+        "task_id": m.task_id,
+        "task_number": task.number if task else None,
+        "external": not m.external_id.startswith("local:"),
+        "sent_at": m.sent_at,
+        "action": {
+            "id": action.id,
+            "kind": action.kind,
+            "state": action.state,
+            "error": error_text(action.error),
+        }
+        if action
+        else None,
+        "translation": {
+            "state": translated.state if translated else "pending",
+            "text": translated.body if translated and translated.state == "ready" else None,
+            "error": translated.error if translated else None,
+            "source": pair[0],
+            "target": pair[1],
+        }
+        if pair
+        else None,
+        "delivery_text": m.delivery_body if not m.deleted else None,
         "kind": m.kind,
         "status": m.status,
         "edited": m.edited,
-        "history": m.history,
-        "content": rich_content(m.kind, m.body),
+        "history": [] if m.deleted else m.history,
+        "content": rich_content(m.kind, "" if m.deleted else m.body),
         "deleted": m.deleted,
-        "created_at": m.created_at,
+        "created_at": (m.sent_at or m.created_at) if m.direction == "out" else m.created_at,
         "is_private_note": m.is_private_note,
         "error_code": m.error_code,
         "error_text": error_text(m.error_code),
         "quoted_message_id": m.quoted_message_id,
-        "quoted_text": m.quoted_text,
+        "quoted_text": "Сообщение удалено" if quote_hidden else m.quoted_text,
         "attachment_name": attachment.filename if attachment else None,
         "attachment_mime": attachment.mime if attachment else None,
         "attachment_url": "/api/files/" + file_signer().dumps(m.attachment_id)
-        if attachment
+        if attachment and not m.deleted
         else None,
     }
 
@@ -195,14 +282,13 @@ def conversations(
         query = query.where(or_(*conditions))
     rows = db.scalars(
         query.order_by(
-            case((Conversation.state == "waiting_us", 0), else_=1),
-            Conversation.updated_at.desc(),
+            func.coalesce(last_activity(), Conversation.created_at).desc(),
             Conversation.id,
         )
         .offset(offset)
         .limit(50)
     )
-    return [describe_conversation(c, db) for c in rows]
+    return [describe_conversation(c, db, user.id) for c in rows]
 
 
 @router.get("/conversations/counts")
@@ -236,7 +322,7 @@ def conversation_detail(
     row = db.get(Conversation, conversation_id)
     if not row:
         raise HTTPException(404, "Диалог не найден")
-    return describe_conversation(row, db)
+    return describe_conversation(row, db, user.id)
 
 
 @router.get("/conversations/{conversation_id}/customer")
@@ -260,24 +346,39 @@ def messages(
     conversation_id: str,
     offset: int = Query(0, ge=0),
     before: str | None = None,
+    ids: str = Query("", max_length=4000),
     user=Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    query = select(Message).where(Message.conversation_id == conversation_id)
+    query = select(Message).where(
+        Message.conversation_id == conversation_id,
+        ~select(MessageHidden.message_id)
+        .where(MessageHidden.message_id == Message.id, MessageHidden.user_id == user.id)
+        .exists(),
+    )
+    if ids:
+        keys = ids.split(",")
+        if len(keys) > 100:
+            raise HTTPException(400, "Не более 100 сообщений")
+        rows = db.scalars(
+            query.where(Message.id.in_(keys)).order_by(message_activity(), Message.id)
+        ).all()
+        return [describe_message(m, db, user.id) for m in rows]
     if before:
         cursor = db.get(Message, before)
         if not cursor or cursor.conversation_id != conversation_id:
             raise HTTPException(400, "Некорректный курсор")
         query = query.where(
             or_(
-                Message.created_at < cursor.created_at,
-                (Message.created_at == cursor.created_at) & (Message.id < cursor.id),
+                message_activity() < (cursor.sent_at or cursor.created_at),
+                (message_activity() == (cursor.sent_at or cursor.created_at))
+                & (Message.id < cursor.id),
             )
         )
     rows = db.scalars(
-        query.order_by(Message.created_at.desc(), Message.id.desc()).offset(offset).limit(50)
+        query.order_by(message_activity().desc(), Message.id.desc()).offset(offset).limit(50)
     ).all()
-    return [describe_message(m, db) for m in reversed(rows)]
+    return [describe_message(m, db, user.id) for m in reversed(rows)]
 
 
 class MessageInput(BaseModel):
@@ -326,6 +427,8 @@ def enqueue(db, conversation, body, user):
         not quoted
         or quoted.conversation_id != conversation.id
         or quoted.is_private_note
+        or quoted.deleted
+        or quoted.external_id.startswith("local:")
         or quoted.author_type == "system"
     ):
         raise HTTPException(400, "Нельзя процитировать это сообщение")
@@ -346,28 +449,33 @@ def enqueue(db, conversation, body, user):
         quoted_message_id=body.quoted_message_id,
         quoted_text=quoted.body[:1000] if quoted else "",
         created_at=timestamp,
+        reply_through_seq=conversation.inbound_seq,
         next_attempt_at=None if body.is_private_note else timestamp,
     )
     if not body.is_private_note:
+        from app.services.translations import prepare_outgoing
+
+        prepare_outgoing(db, conversation, msg)
         supersede(db, conversation.id, "manual_reply")
     db.add(msg)
     if attachment and body.text.strip() and not body.is_private_note:
         caption_id = str(uuid.uuid5(body.client_id, "caption"))
-        db.add(
-            Message(
-                id=caption_id,
-                conversation_id=conversation.id,
-                channel_id=conversation.channel_id,
-                external_id="local:" + caption_id,
-                direction="out",
-                author_type="user",
-                author_id=user.id,
-                body=body.text,
-                status="queued",
-                created_at=timestamp + timedelta(microseconds=1),
-                next_attempt_at=timestamp,
-            )
+        caption = Message(
+            id=caption_id,
+            conversation_id=conversation.id,
+            channel_id=conversation.channel_id,
+            external_id="local:" + caption_id,
+            direction="out",
+            author_type="user",
+            author_id=user.id,
+            body=body.text,
+            status="queued",
+            created_at=timestamp + timedelta(microseconds=1),
+            next_attempt_at=timestamp,
+            reply_through_seq=conversation.inbound_seq,
         )
+        prepare_outgoing(db, conversation, caption)
+        db.add(caption)
     if not body.is_private_note:
         conversation.updated_at = timestamp
         if conversation.state == "closed":
@@ -411,7 +519,7 @@ async def new_conversation(
         if existing_message.author_id != user.id or not c or c.phone != phone:
             raise HTTPException(409, "Идентификатор отправки уже используется")
         enqueue(db, c, body, user)
-        return describe_conversation(c, db)
+        return describe_conversation(c, db, user.id)
     channel_id = body.channel_id or get_setting(db, "wazzup.default_channel_id", "")
     try:
         channels = await WazzupAdapter(get_setting(db, "wazzup.api_key", "")).list_channels()
@@ -460,7 +568,7 @@ async def new_conversation(
     enqueue(db, conversation, body, user)
     db.commit()
     emit(conversations=[conversation.id])
-    return describe_conversation(conversation, db)
+    return describe_conversation(conversation, db, user.id)
 
 
 class ConversationPatch(BaseModel):
@@ -496,16 +604,64 @@ def change_conversation(
     db.add(AuditEvent(user_id=user.id, action="conversation.updated", target=c.id))
     db.commit()
     emit(conversations=[c.id])
-    return describe_conversation(c, db)
+    return describe_conversation(c, db, user.id)
 
 
 @router.post("/conversations/{conversation_id}/read")
 def mark_read(conversation_id: str, user=Depends(current_user), db: Session = Depends(get_db)):
     c = locked_conversation(db, conversation_id)
-    c.unread_count = 0
     c.task_updated = False
     db.commit()
     return {"ok": True}
+
+
+class ResponseStateInput(BaseModel):
+    required: bool
+    inbound_seq: int = Field(ge=0)
+
+
+@router.post("/conversations/{conversation_id}/response-state")
+def response_state(
+    conversation_id: str,
+    body: ResponseStateInput,
+    user=Depends(writer),
+    db: Session = Depends(get_db),
+):
+    from app.services.response_state import refresh_unanswered
+
+    c = locked_conversation(db, conversation_id)
+    if c.inbound_seq != body.inbound_seq:
+        raise HTTPException(
+            409, "Пришло новое сообщение. Обновите диалог перед изменением отметки."
+        )
+    if not c.inbound_seq:
+        raise HTTPException(400, "В диалоге ещё нет сообщения клиента")
+    latest = db.scalar(
+        select(Message.inbound_seq)
+        .where(
+            Message.conversation_id == c.id, Message.direction == "in", Message.deleted.is_(False)
+        )
+        .order_by(Message.inbound_seq.desc())
+        .limit(1)
+    )
+    if latest is None:
+        raise HTTPException(400, "В диалоге нет доступных сообщений клиента")
+    c.answered_seq = latest - 1 if body.required else c.inbound_seq
+    refresh_unanswered(db, c)
+    if not body.required:
+        supersede(db, c.id, "no_reply_required")
+    db.add(
+        AuditEvent(
+            user_id=user.id,
+            action="conversation.requires_reply"
+            if body.required
+            else "conversation.no_reply_required",
+            target=c.id,
+        )
+    )
+    db.commit()
+    emit(conversations=[c.id])
+    return describe_conversation(c, db, user.id)
 
 
 class RetryInput(BaseModel):

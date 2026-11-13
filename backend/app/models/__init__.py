@@ -122,6 +122,8 @@ class Conversation(Base):
     onec_next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     onec_error: Mapped[str | None] = mapped_column(String(40))
     unread_count: Mapped[int] = mapped_column(Integer, default=0)
+    inbound_seq: Mapped[int] = mapped_column(Integer, default=0)
+    answered_seq: Mapped[int] = mapped_column(Integer, default=0)
     task_updated: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
@@ -150,6 +152,14 @@ class Message(Base):
     author_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     quoted_message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id"))
     quoted_text: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    inbound_seq: Mapped[int | None] = mapped_column(Integer)
+    reply_through_seq: Mapped[int | None] = mapped_column(Integer)
+    reply_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id"))
+    delivery_body: Mapped[str | None] = mapped_column(Text)
+    delivery_source_language: Mapped[str] = mapped_column(String(20), default="")
+    delivery_target_language: Mapped[str] = mapped_column(String(20), default="")
     is_private_note: Mapped[bool] = mapped_column(Boolean, default=False)
     error_code: Mapped[str | None] = mapped_column(String(100))
     send_attempts: Mapped[int] = mapped_column(Integer, default=0)
@@ -252,6 +262,10 @@ class Customer(Base):
     name: Mapped[str] = mapped_column(String(200), default="")
     name_manual: Mapped[bool] = mapped_column(Boolean, default=False)
     language: Mapped[str] = mapped_column(String(20), default="")
+    translate_incoming: Mapped[bool] = mapped_column(Boolean, default=False)
+    translate_outgoing: Mapped[bool] = mapped_column(Boolean, default=False)
+    translation_client_language: Mapped[str] = mapped_column(String(20), default="en")
+    translation_manager_language: Mapped[str] = mapped_column(String(20), default="ru")
     segment: Mapped[str] = mapped_column(String(20), default="")
     country: Mapped[str] = mapped_column(String(2), default="")
     tags: Mapped[list] = mapped_column(JSONB, default=list)
@@ -397,3 +411,47 @@ class IntegrationHealth(Base):
     name: Mapped[str] = mapped_column(String(40), primary_key=True)
     details: Mapped[dict] = mapped_column(JSONB, default=dict)
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class MessageHidden(Base):
+    __tablename__ = "message_hidden"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class MessageAction(Base):
+    __tablename__ = "message_actions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    kind: Mapped[str] = mapped_column(String(10))
+    body: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(20), default="queued")
+    error: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MessageTranslation(Base):
+    __tablename__ = "message_translations"
+    __table_args__ = (
+        UniqueConstraint("message_id", "revision", "source_language", "target_language"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer)
+    source_language: Mapped[str] = mapped_column(String(20))
+    target_language: Mapped[str] = mapped_column(String(20))
+    original: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text, default="")
+    state: Mapped[str] = mapped_column(String(20), default="pending")
+    error: Mapped[str | None] = mapped_column(String(100))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

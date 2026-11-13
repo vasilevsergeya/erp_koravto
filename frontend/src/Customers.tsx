@@ -26,6 +26,7 @@ import {
 } from "./customer-api";
 import "./customer-i18n";
 import "./customers.css";
+import { TranslationFields } from "./MessageTools";
 
 type CustomerDetail = CustomerLite & {
   redirected_from?: string | null;
@@ -98,6 +99,13 @@ function ProfileForm({
   const [name, setName] = useState(initialName.current);
   const [phone, setPhone] = useState("");
   const [phoneCountry, setPhoneCountry] = useState("RU");
+  const [translation, setTranslation] = useState({
+    translate_incoming: customer?.translate_incoming || false,
+    translate_outgoing: customer?.translate_outgoing || false,
+    translation_client_language: customer?.translation_client_language || "en",
+    translation_manager_language:
+      customer?.translation_manager_language || "ru",
+  });
   const [language, setLanguage] = useState(customer?.language || "");
   const [country, setCountry] = useState(customer?.country || "");
   const [segment, setSegment] = useState<string | null>(
@@ -125,6 +133,7 @@ function ProfileForm({
         {
           ...(!customer || name !== initialName.current ? { name } : {}),
           language,
+          ...translation,
           country,
           segment: segment || "",
           tags,
@@ -205,6 +214,11 @@ function ProfileForm({
             .map((u) => ({ value: u.id, label: u.name }))}
         />
       </div>
+      <TranslationFields
+        value={translation}
+        onChange={(fields) => setTranslation((v) => ({ ...v, ...fields }))}
+        disabled={busy}
+      />
       <TagsInput label={t("tags")} value={tags} onChange={setTags} />
       <TagsInput
         label={t("manualOrders")}

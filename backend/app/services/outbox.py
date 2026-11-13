@@ -16,6 +16,14 @@ from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
 from app.models import Conversation, DeliveryReceipt, Message, now, uid
 
 ERRORS = {
+    "change_unknown": "Результат изменения не подтверждён. Проверьте сообщение в WhatsApp перед повтором.",
+    "message_changed": "Сообщение уже изменилось. Обновите диалог.",
+    "MESSAGES_EDITING_TIME_EXPIRED": "Истёк срок редактирования сообщения.",
+    "MESSAGES_DELETION_TIME_EXPIRED": "Истёк срок удаления сообщения.",
+    "CHANNEL_INVALID_TRANSPORT_FOR_EDITING": "Этот канал не поддерживает редактирование.",
+    "CHANNEL_INVALID_TRANSPORT_FOR_DELETION": "Этот канал не поддерживает удаление.",
+    "MESSAGES_NOT_FOUND": "Провайдер не нашёл сообщение.",
+    "translation_not_configured": "Для перевода не настроен ключ OpenAI.",
     "BAD_CONTACT": "Номер не зарегистрирован в WhatsApp или недоступен.",
     "MESSAGES_NOT_TEXT_FIRST": "Тариф Wazzup не позволяет писать этому номеру первым.",
     "MESSAGES_IS_SPAM": "Wazzup отклонил сообщение как спам.",
@@ -110,7 +118,7 @@ async def deliver_message(ctx, message_id):
                 select(Message.id)
                 .where(
                     Message.channel_id == msg.channel_id,
-                    Message.status.in_(["queued", "retry", "sending"]),
+                    Message.status.in_(["queued", "retry", "sending", "translating"]),
                     Message.created_at < msg.created_at,
                 )
                 .limit(1)
@@ -138,7 +146,7 @@ async def deliver_message(ctx, message_id):
                     config().public_url + "/api/files/" + file_signer().dumps(msg.attachment_id)
                 )
             else:
-                payload["text"] = msg.body
+                payload["text"] = msg.delivery_body if msg.delivery_body is not None else msg.body
             if msg.quoted_message_id:
                 quoted = db.get(Message, msg.quoted_message_id)
                 if quoted and not quoted.external_id.startswith("local:"):
@@ -161,9 +169,7 @@ async def deliver_message(ctx, message_id):
             )
             # Match inbox/AI lock order when a reply or cancellation arrives during delivery.
             conversation = db.scalar(
-                select(Conversation)
-                .where(Conversation.id == conversation_id)
-                .with_for_update()
+                select(Conversation).where(Conversation.id == conversation_id).with_for_update()
             )
             msg = db.scalar(select(Message).where(Message.id == message_id).with_for_update())
             if not msg:
@@ -218,6 +224,10 @@ async def deliver_message(ctx, message_id):
                         )
                 else:
                     msg.status, msg.error_code, msg.next_attempt_at = "error", code, None
+            if conversation:
+                from app.services.response_state import acknowledge_reply
+
+                acknowledge_reply(db, conversation, msg)
             db.commit()
         emit(conversations=[conversation_id])
     finally:

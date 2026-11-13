@@ -66,6 +66,8 @@ def system_note(db, task, actor, action, comment=""):
     if not conversation:
         return
     conversation.task_updated = True
+    author = db.get(User, actor) if actor else None
+    assignee = db.get(User, task.assignee_id) if task.assignee_id else None
     db.add(
         Message(
             conversation_id=conversation.id,
@@ -74,10 +76,12 @@ def system_note(db, task, actor, action, comment=""):
             direction="system",
             author_type="system",
             author_id=actor,
+            task_id=task.id,
             kind="system",
             status="internal",
             is_private_note=True,
-            body=f"Задача T-{task.number} {action}: {task.title}"
+            body=f"{author.email if author else 'Система'} · Задача T-{task.number} {action}: {task.title}"
+            + f"\nИсполнитель: {assignee.email if assignee else 'не назначен'}"
             + ("\n" + comment if comment else ""),
         )
     )

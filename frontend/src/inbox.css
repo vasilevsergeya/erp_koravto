@@ -334,13 +334,81 @@
   }
 }
 
-.crm-onec {border-top:1px solid #e5e9ef;margin-top:20px;padding-top:4px}
-.crm-onec-client {padding:10px 0;border-bottom:1px solid #e5e9ef;overflow-wrap:anywhere}
-.crm-onec-client > small {display:block;color:#6b7280;margin:6px 0}
-.crm-onec-orders {max-height:280px;overflow:auto}
-.crm-onec-stale {color:#986211;font-size:12px}
+.crm-onec {
+  border-top: 1px solid #e5e9ef;
+  margin-top: 20px;
+  padding-top: 4px;
+}
+.crm-onec-client {
+  padding: 10px 0;
+  border-bottom: 1px solid #e5e9ef;
+  overflow-wrap: anywhere;
+}
+.crm-onec-client > small {
+  display: block;
+  color: #6b7280;
+  margin: 6px 0;
+}
+.crm-onec-orders {
+  max-height: 280px;
+  overflow: auto;
+}
+.crm-onec-stale {
+  color: #986211;
+  font-size: 12px;
+}
 
-.quick-reply-picker{padding:12px;background:#f3f7f7;border:1px solid #d6e2df;border-radius:8px;margin-bottom:8px;max-height:300px;overflow:auto}
+.quick-reply-picker {
+  padding: 12px;
+  background: #f3f7f7;
+  border: 1px solid #d6e2df;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  max-height: 300px;
+  overflow: auto;
+}
 
-.crm-dialog .mantine-Badge-root{color:var(--badge-color)}
-.crm-dialog .mantine-Badge-label{color:inherit}
+.crm-dialog .mantine-Badge-root {
+  color: var(--badge-color);
+}
+.crm-dialog .mantine-Badge-label {
+  color: inherit;
+}
+.crm-message-tools,
+.crm-compose-followup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.crm-message-tools button,
+.crm-translation-status button {
+  background: none;
+  border: 0;
+  color: #17644f;
+  cursor: pointer;
+  padding: 2px 0;
+  font-size: 11px;
+  text-decoration: underline;
+}
+.crm-translation-status {
+  color: #596a63;
+  font-size: 11px;
+  margin-top: 6px;
+}
+.crm-translation-preferences {
+  border-top: 1px solid #e2e8e5;
+  padding: 10px 0;
+}
+.crm-translation-fields {
+  padding: 10px 0;
+}
+.crm-translation-fields small {
+  color: #596a63;
+  line-height: 1.5;
+}
+.crm-message a {
+  color: #0c654e;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}

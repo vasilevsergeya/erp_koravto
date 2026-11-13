@@ -21,7 +21,12 @@ import {
   type User,
 } from "./api";
 import "./inbox.css";
-import { ConversationTasks } from "./Tasks";
+import {
+  MessageActions,
+  LinkedText,
+  TranslationPreferences,
+} from "./MessageTools";
+import { ConversationTasks, createTask, openTask } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
 import { QuickReplyPicker } from "./QuickReplies";
 import { DraftPanel } from "./AI";
@@ -73,6 +78,7 @@ export function Inbox({ user }: { user: User }) {
   const [file, setFile] = useState<File | null>(null);
   const [attachment, setAttachment] = useState<string | null>(null);
   const [note, setNote] = useState(false);
+  const [originals, setOriginals] = useState<Record<string, boolean>>({});
   const [quoted, setQuoted] = useState<Message | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -224,13 +230,13 @@ export function Inbox({ user }: { user: User }) {
       void query.invalidateQueries({ queryKey: [key] });
   };
   useEffect(() => {
-    if (selected && current.data?.unread_count)
+    if (selected && current.data?.task_updated)
       void api("/api/conversations/" + selected + "/read", "POST")
-        .then(() => {
-          void query.invalidateQueries({ queryKey: ["conversation-counts"] });
-        })
+        .then(() =>
+          query.invalidateQueries({ queryKey: ["conversation", selected] }),
+        )
         .catch(() => {});
-  }, [selected, current.data?.unread_count, query]);
+  }, [selected, current.data?.task_updated, query]);
   const lastId = messages.data?.at(-1)?.id;
   useEffect(() => {
     const element = pane.current;
@@ -357,10 +363,37 @@ export function Inbox({ user }: { user: User }) {
       setError(errorText(e));
     }
   }
+  const oldMessages = useQuery({
+    queryKey: ["messages", selected, "older", older.map((m) => m.id).join(",")],
+    enabled: !!selected && older.length > 0,
+    refetchInterval: 5000,
+    queryFn: async () => {
+      const rows: Message[] = [];
+      for (let i = 0; i < older.length; i += 100)
+        rows.push(
+          ...(await api<Message[]>(
+            "/api/conversations/" +
+              selected +
+              "/messages?ids=" +
+              older
+                .slice(i, i + 100)
+                .map((m) => m.id)
+                .join(","),
+          )),
+        );
+      return rows;
+    },
+  });
   const allMessages = Array.from(
     new Map(
-      [...older, ...(messages.data || [])].map((m) => [m.id, m]),
+      [...(oldMessages.data || older), ...(messages.data || [])].map((m) => [
+        m.id,
+        m,
+      ]),
     ).values(),
+  ).sort(
+    (a, b) =>
+      a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
   );
   const c = current.data;
   const onec = customer.data;
@@ -368,6 +401,15 @@ export function Inbox({ user }: { user: User }) {
   const customerCard = (
     <div className="crm-customer-content">
       {c?.customer_id && <CustomerSidebar id={c.customer_id} />}
+      {c?.customer_id && (
+        <TranslationPreferences
+          key={c.id}
+          customerId={c.customer_id}
+          canWrite={canWrite}
+          original={!!originals[c.id]}
+          onOriginal={(value) => setOriginals((p) => ({ ...p, [c.id]: value }))}
+        />
+      )}
       {c && <ConversationTasks conversation={c} />}
       <h3>{t("customer")}</h3>
       <TextInput
@@ -726,13 +768,17 @@ export function Inbox({ user }: { user: User }) {
                     {m.author_type === "system"
                       ? taskLabel("system")
                       : m.is_private_note
-                        ? t("privateNote")
+                        ? t("privateNote") +
+                          " · " +
+                          (m.author_name || t(m.author_type))
                         : m.author_name || t(m.author_type)}
                     {m.edited && " · " + t("edited")}
                     {m.deleted && " · " + t("deleted")}
                   </div>
                   {m.quoted_text && (
-                    <blockquote dir="auto">{m.quoted_text}</blockquote>
+                    <blockquote dir="auto">
+                      <LinkedText text={m.quoted_text} />
+                    </blockquote>
                   )}
                   {m.content?.map_url && (
                     <a
@@ -751,15 +797,63 @@ export function Inbox({ user }: { user: User }) {
                       ))}
                     </div>
                   )}
+                  {m.deleted && <p>Сообщение удалено</p>}
+                  {m.task_id && (
+                    <a
+                      href={"/tasks/T-" + m.task_number}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        openTask(m.task_id!);
+                      }}
+                    >
+                      Открыть задачу T-{m.task_number}
+                    </a>
+                  )}
                   {m.text &&
                     (m.kind !== "vcard" || !m.content?.phones?.length) && (
-                      <div className="crm-message-text">{m.text}</div>
+                      <div className="crm-message-text">
+                        <LinkedText
+                          text={
+                            !originals[selected] &&
+                            m.translation?.state === "ready"
+                              ? m.translation.text || m.text
+                              : m.text
+                          }
+                        />
+                      </div>
                     )}
+                  {!originals[selected] && m.translation && !m.deleted && (
+                    <div className="crm-translation-status">
+                      {m.translation.state === "ready"
+                        ? `Перевод · ${m.translation.source} → ${m.translation.target}`
+                        : m.translation.error === "not_configured"
+                          ? "Для перевода настройте ключ OpenAI. Показан оригинал."
+                          : m.translation.state === "error"
+                            ? "Перевод недоступен. Показан оригинал."
+                            : "Перевод готовится… Показан оригинал."}
+                      {m.translation.state === "error" && canWrite && (
+                        <button
+                          onClick={() =>
+                            void api(
+                              "/api/messages/" + m.id + "/translation/retry",
+                              "POST",
+                            )
+                              .then(refresh)
+                              .catch((e) => setError(errorText(e)))
+                          }
+                        >
+                          Повторить перевод
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {!!m.history?.length && (
                     <details>
                       <summary>{t("v1:previousVersions")}</summary>
                       {m.history.map((v, i) => (
-                        <p key={i}>{v.body}</p>
+                        <p key={i}>
+                          <LinkedText text={v.body} />
+                        </p>
                       ))}
                     </details>
                   )}
@@ -799,14 +893,16 @@ export function Inbox({ user }: { user: User }) {
                   <footer>
                     <time>{time(m.created_at)}</time>
                     <span>
-                      {t("status_" + m.status, { defaultValue: m.status })}
+                      {m.status === "translating"
+                        ? "Ожидает перевода"
+                        : t("status_" + m.status, { defaultValue: m.status })}
                     </span>
                     {canWrite &&
                       !m.is_private_note &&
+                      !m.deleted &&
+                      m.external &&
                       m.author_type !== "system" && (
-                        <button onClick={() => setQuoted(m)}>
-                          {t("quote")}
-                        </button>
+                        <button onClick={() => setQuoted(m)}>Ответить</button>
                       )}
                     {canWrite &&
                       ["error", "uncertain"].includes(m.status) &&
@@ -816,6 +912,13 @@ export function Inbox({ user }: { user: User }) {
                         </button>
                       )}
                   </footer>
+                  {canWrite && (
+                    <MessageActions
+                      message={m}
+                      user={user}
+                      onChanged={refresh}
+                    />
+                  )}
                 </article>
               ))}
               <div ref={end} />
@@ -895,6 +998,42 @@ export function Inbox({ user }: { user: User }) {
                   >
                     {note ? t("saveNote") : t("send")}
                   </Button>
+                </div>
+                <div className="crm-compose-followup">
+                  {c && c.inbound_seq > 0 && (
+                    <Button
+                      size="xs"
+                      variant="light"
+                      color={c.unread_count ? "teal" : "orange"}
+                      disabled={busy}
+                      onClick={() =>
+                        void api(
+                          "/api/conversations/" + c.id + "/response-state",
+                          "POST",
+                          {
+                            required: !c.unread_count,
+                            inbound_seq: c.inbound_seq,
+                          },
+                        )
+                          .then(refresh)
+                          .catch((e) => {
+                            setError(errorText(e));
+                            refresh();
+                          })
+                      }
+                    >
+                      {c.unread_count ? "Не требует ответа" : "Требует ответа"}
+                    </Button>
+                  )}
+                  {c && (
+                    <Button
+                      size="xs"
+                      variant="default"
+                      onClick={() => createTask(c)}
+                    >
+                      Создать задачу
+                    </Button>
+                  )}
                 </div>
                 <small className="crm-compose-hint">{t("composeHint")}</small>
               </div>

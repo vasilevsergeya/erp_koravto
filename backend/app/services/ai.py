@@ -710,20 +710,23 @@ def queue_auto():
                 db.commit()
                 continue
             mid = uid()
-            db.add(
-                Message(
-                    id=mid,
-                    conversation_id=c.id,
-                    channel_id=c.channel_id,
-                    external_id="local:" + mid,
-                    direction="out",
-                    author_type="ai",
-                    body=draft.body,
-                    kind="text",
-                    status="queued",
-                    next_attempt_at=now(),
-                )
+            msg = Message(
+                id=mid,
+                conversation_id=c.id,
+                channel_id=c.channel_id,
+                external_id="local:" + mid,
+                direction="out",
+                author_type="ai",
+                body=draft.body,
+                kind="text",
+                status="queued",
+                next_attempt_at=now(),
+                reply_through_seq=c.inbound_seq,
             )
+            from app.services.translations import prepare_outgoing
+
+            prepare_outgoing(db, c, msg)
+            db.add(msg)
             db.flush()
             draft.message_id = mid
             draft.decision = "auto_sent"
