@@ -380,6 +380,40 @@ class CustomersAcceptance(unittest.TestCase):
         self.assertEqual(response.json()["customer_id"], profile["id"])
         self.assertEqual(response.json()["id"], chat_id)
 
+    def test_busy_customer_lock_defers_webhook_without_losing_it(self):
+        event_id = uid()
+        with SessionLocal() as db:
+            db.add(
+                WebhookEvent(
+                    id=event_id,
+                    payload={
+                        "messages": [
+                            dict(
+                                channelId=uid(),
+                                chatId="12025550123",
+                                chatType="whatsapp",
+                                messageId=uid(),
+                                type="text",
+                                text="Pending",
+                                status="inbound",
+                            )
+                        ]
+                    },
+                )
+            )
+            db.commit()
+        with SessionLocal() as owner:
+            structure_lock(owner)
+            asyncio.run(asyncio.wait_for(process_webhook({"redis": AsyncMock()}, event_id), 2))
+            with SessionLocal() as db:
+                pending = db.get(WebhookEvent, event_id)
+                self.assertEqual(pending.state, "pending")
+                self.assertEqual(pending.attempts, 0)
+            owner.rollback()
+        asyncio.run(process_webhook({"redis": AsyncMock()}, event_id))
+        with SessionLocal() as db:
+            self.assertEqual(db.get(WebhookEvent, event_id).state, "processed")
+
     def test_migration_backfills_existing_data_without_rewriting_history(self):
         schema = "test_customer_migration_" + uid().replace("-", "")
         with engine.begin() as connection:

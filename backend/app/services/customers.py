@@ -15,8 +15,11 @@ from app.core.settings import redis_client
 from app.models import Customer, CustomerEvent, CustomerIdentity, now
 
 
-def structure_lock(db):
+def structure_lock(db, *, wait=True):
+    if not wait:
+        return bool(db.scalar(text("SELECT pg_try_advisory_xact_lock(734011)")))
     db.execute(text("SELECT pg_advisory_xact_lock(734011)"))
+    return True
 
 
 def phone_identity(value, country=None):

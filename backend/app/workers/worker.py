@@ -75,8 +75,12 @@ async def process_webhook(ctx, event_id: str):
             if event is None or event.state not in ("pending", "error"):
                 return
             messages, statuses = WazzupAdapter.parse_webhook(event.payload)
-            if messages:
-                structure_lock(db)
+            if messages and not structure_lock(db, wait=False):
+                # Do not block this event loop while another job downloads an attachment.
+                # The durable pending event is retried by recovery; no attempt is consumed.
+                event.next_attempt_at = now() + timedelta(seconds=1)
+                db.commit()
+                return
             for item in messages:
                 db.execute(
                     text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
