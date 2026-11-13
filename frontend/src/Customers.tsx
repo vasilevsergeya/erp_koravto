@@ -94,7 +94,8 @@ function ProfileForm({
   onCancel: () => void;
 }) {
   const { t } = useTranslation("customers");
-  const [name, setName] = useState(customer?.name || "");
+  const initialName = useRef(customer?.display_name || customer?.name || "");
+  const [name, setName] = useState(initialName.current);
   const [phone, setPhone] = useState("");
   const [phoneCountry, setPhoneCountry] = useState("RU");
   const [language, setLanguage] = useState(customer?.language || "");
@@ -122,7 +123,7 @@ function ProfileForm({
         customer ? "/api/customers/" + customer.id : "/api/customers",
         customer ? "PATCH" : "POST",
         {
-          name,
+          ...(!customer || name !== initialName.current ? { name } : {}),
           language,
           country,
           segment: segment || "",
