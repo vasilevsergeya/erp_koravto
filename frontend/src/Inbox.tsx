@@ -21,9 +21,10 @@ import {
   type User,
 } from "./api";
 import "./inbox.css";
-import {ConversationTasks} from "./Tasks";
-import {CustomerSidebar} from "./Customers";
-import {taskLabel} from "./task-i18n";
+import { ConversationTasks } from "./Tasks";
+import { CustomerSidebar } from "./Customers";
+import { DraftPanel } from "./AI";
+import { taskLabel } from "./task-i18n";
 
 type Channel = {
   channelId: string;
@@ -51,8 +52,16 @@ const errorText = (error: unknown) =>
 export function Inbox({ user }: { user: User }) {
   const { t } = useTranslation("inbox");
   const query = useQueryClient();
-  const [selected, setSelected] = useState<string | null>(() => sessionStorage.getItem('crm-open-conversation'));
-  useEffect(() => {sessionStorage.removeItem('crm-open-conversation');const show=(event:Event)=>setSelected((event as CustomEvent<string>).detail);window.addEventListener('crm:conversation',show);return()=>window.removeEventListener('crm:conversation',show);},[]);
+  const [selected, setSelected] = useState<string | null>(() =>
+    sessionStorage.getItem("crm-open-conversation") || new URLSearchParams(location.search).get("conversation"),
+  );
+  useEffect(() => {
+    sessionStorage.removeItem("crm-open-conversation");
+    const show = (event: Event) =>
+      setSelected((event as CustomEvent<string>).detail);
+    window.addEventListener("crm:conversation", show);
+    return () => window.removeEventListener("crm:conversation", show);
+  }, []);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -74,7 +83,27 @@ export function Inbox({ user }: { user: User }) {
   const [channel, setChannel] = useState<string | null>(null);
   const [firstText, setFirstText] = useState("");
   const [newId, setNewId] = useState<string>(() => crypto.randomUUID());
-  useEffect(()=>{const open=()=>{const raw=sessionStorage.getItem("crm-new-conversation");if(raw){try{const value=JSON.parse(raw);setPhone(value.phone||"");setName(value.name||"");setNewOpen(true);setNewId(crypto.randomUUID());setFirstText("");}catch{/* ignore invalid local state */}sessionStorage.removeItem("crm-new-conversation");}};open();window.addEventListener("crm:new-conversation",open);return()=>window.removeEventListener("crm:new-conversation",open);},[]);
+  useEffect(() => {
+    const open = () => {
+      const raw = sessionStorage.getItem("crm-new-conversation");
+      if (raw) {
+        try {
+          const value = JSON.parse(raw);
+          setPhone(value.phone || "");
+          setName(value.name || "");
+          setNewOpen(true);
+          setNewId(crypto.randomUUID());
+          setFirstText("");
+        } catch {
+          /* ignore invalid local state */
+        }
+        sessionStorage.removeItem("crm-new-conversation");
+      }
+    };
+    open();
+    window.addEventListener("crm:new-conversation", open);
+    return () => window.removeEventListener("crm:new-conversation", open);
+  }, []);
   const [order, setOrder] = useState("");
   const [cardOpen, setCardOpen] = useState(false);
   const [refreshingCustomer, setRefreshingCustomer] = useState(false);
@@ -135,7 +164,8 @@ export function Inbox({ user }: { user: User }) {
   });
   const customer = useQuery({
     queryKey: ["onec-customer", selected],
-    queryFn: () => api<OneCCustomer>("/api/conversations/" + selected + "/customer"),
+    queryFn: () =>
+      api<OneCCustomer>("/api/conversations/" + selected + "/customer"),
     enabled: !!selected,
     staleTime: 30000,
     refetchInterval: 60000,
@@ -148,7 +178,8 @@ export function Inbox({ user }: { user: User }) {
     setCustomerError("");
     try {
       const result = await api<OneCCustomer>(
-        "/api/conversations/" + target + "/customer/refresh", "POST",
+        "/api/conversations/" + target + "/customer/refresh",
+        "POST",
       );
       query.setQueryData(["onec-customer", target], result);
       void query.invalidateQueries({ queryKey: ["conversation", target] });
@@ -322,8 +353,8 @@ export function Inbox({ user }: { user: User }) {
   const displayName = c?.display_name || c?.name || c?.phone;
   const customerCard = (
     <div className="crm-customer-content">
-      {c?.customer_id && <CustomerSidebar id={c.customer_id}/>}
-      {c && <ConversationTasks conversation={c}/>}
+      {c?.customer_id && <CustomerSidebar id={c.customer_id} />}
+      {c && <ConversationTasks conversation={c} />}
       <h3>{t("customer")}</h3>
       <TextInput
         label={t("chatName")}
@@ -356,22 +387,68 @@ export function Inbox({ user }: { user: User }) {
 
       <section className="crm-onec" aria-label={t("onecCustomer")}>
         <h4>{t("onecCustomer")}</h4>
-        {customer.isLoading && <p role="status"><Loader size="xs" /> {t("onecLoading")}</p>}
-        {(customer.error || customerError) && <Alert color="orange">{customerError || errorText(customer.error)}</Alert>}
-        {onec && <>
-          {onec.status !== "matched" && <p className="crm-muted" role="status">{t("onec_" + onec.status)}</p>}
-          {onec.error && onec.status === "unavailable" && <p className="crm-muted">{t("onecError_" + onec.error, { defaultValue: t("onec_unavailable") })}</p>}
-          {onec.clients.map((client, index) => <div className="crm-onec-client" key={index}>
-            <b dir="auto">{client.name}</b>
-            <small>{t("orders")} · {client.realizations.length}</small>
-            {client.realizations.length ? <div className="crm-onec-orders">
-              {client.realizations.map((number, i) => <div className="crm-order" key={i}><span>{number}</span></div>)}
-            </div> : <p className="crm-muted">{t("onecNoOrders")}</p>}
-          </div>)}
-          {onec.stale && <p className="crm-onec-stale">{t("onecStale")}</p>}
-          {onec.checked_at && <small className="crm-muted">{t("onecChecked")} {time(onec.checked_at)}</small>}
-        </>}
-        {canWrite && <Button mt="sm" size="xs" variant="light" loading={refreshingCustomer || customer.isFetching} onClick={() => void refreshCustomer()}>{t("onecRefresh")}</Button>}
+        {customer.isLoading && (
+          <p role="status">
+            <Loader size="xs" /> {t("onecLoading")}
+          </p>
+        )}
+        {(customer.error || customerError) && (
+          <Alert color="orange">
+            {customerError || errorText(customer.error)}
+          </Alert>
+        )}
+        {onec && (
+          <>
+            {onec.status !== "matched" && (
+              <p className="crm-muted" role="status">
+                {t("onec_" + onec.status)}
+              </p>
+            )}
+            {onec.error && onec.status === "unavailable" && (
+              <p className="crm-muted">
+                {t("onecError_" + onec.error, {
+                  defaultValue: t("onec_unavailable"),
+                })}
+              </p>
+            )}
+            {onec.clients.map((client, index) => (
+              <div className="crm-onec-client" key={index}>
+                <b dir="auto">{client.name}</b>
+                <small>
+                  {t("orders")} · {client.realizations.length}
+                </small>
+                {client.realizations.length ? (
+                  <div className="crm-onec-orders">
+                    {client.realizations.map((number, i) => (
+                      <div className="crm-order" key={i}>
+                        <span>{number}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="crm-muted">{t("onecNoOrders")}</p>
+                )}
+              </div>
+            ))}
+            {onec.stale && <p className="crm-onec-stale">{t("onecStale")}</p>}
+            {onec.checked_at && (
+              <small className="crm-muted">
+                {t("onecChecked")} {time(onec.checked_at)}
+              </small>
+            )}
+          </>
+        )}
+        {canWrite && (
+          <Button
+            mt="sm"
+            size="xs"
+            variant="light"
+            loading={refreshingCustomer || customer.isFetching}
+            onClick={() => void refreshCustomer()}
+          >
+            {t("onecRefresh")}
+          </Button>
+        )}
       </section>
       <h4>{t("manualOrders")}</h4>
       {c?.order_numbers.map((number) => (
@@ -492,7 +569,11 @@ export function Inbox({ user }: { user: User }) {
                 <small>{time(item.updated_at)}</small>
               </div>
               <p>{item.last_message || t("attachment")}</p>
-              {item.task_updated && <Badge size="xs" color="orange">{taskLabel("taskUpdate")}</Badge>}
+              {item.task_updated && (
+                <Badge size="xs" color="orange">
+                  {taskLabel("taskUpdate")}
+                </Badge>
+              )}
               <div>
                 <span>{t(item.state)}</span>
                 {item.unread_count > 0 && (
@@ -589,19 +670,23 @@ export function Inbox({ user }: { user: User }) {
                 <article
                   className={
                     "crm-message " +
-                    (m.author_type === "system" ? "system" : m.is_private_note
-                      ? "private"
-                      : m.direction === "out"
-                        ? "out"
-                        : "in")
+                    (m.author_type === "system"
+                      ? "system"
+                      : m.is_private_note
+                        ? "private"
+                        : m.direction === "out"
+                          ? "out"
+                          : "in")
                   }
                   dir="auto"
                   key={m.id}
                 >
                   <div className="crm-message-author">
-                    {m.author_type === "system" ? taskLabel("system") : m.is_private_note
-                      ? t("privateNote")
-                      : m.author_name || t(m.author_type)}
+                    {m.author_type === "system"
+                      ? taskLabel("system")
+                      : m.is_private_note
+                        ? t("privateNote")
+                        : m.author_name || t(m.author_type)}
                     {m.edited && " · " + t("edited")}
                     {m.deleted && " · " + t("deleted")}
                   </div>
@@ -666,6 +751,11 @@ export function Inbox({ user }: { user: User }) {
               ))}
               <div ref={end} />
             </div>
+            <DraftPanel
+              key={selected}
+              conversationId={selected}
+              canWrite={canWrite}
+            />
             {canWrite ? (
               <div className="crm-composer">
                 {quoted && (

@@ -73,6 +73,19 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
     networks: [backend]
+  assistant:
+    <<: *common
+    image: koravto-crm-api:${CRM_RELEASE:-current}
+    mem_limit: 192m
+    command: ["sh", "-c", "python -m app.wait_schema && exec arq app.workers.assistant.WorkerSettings"]
+    environment: *app-env
+    volumes:
+      - ../data/logs/app:/var/log/crm
+    depends_on:
+      api: {condition: service_started}
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
   web:
     <<: *common
     image: koravto-crm-web:${CRM_RELEASE:-current}

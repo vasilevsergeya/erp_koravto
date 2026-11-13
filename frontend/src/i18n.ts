@@ -29,3 +29,6 @@ void i18n.use(initReactI18next).init({lng:'ru', fallbackLng:'ru', interpolation:
 }}}});
 export default i18n;
 
+
+i18n.addResourceBundle("ru","translation",{preferences:"Мои уведомления",preferencesHint:"Каналы, звук и история доставки",aiReport:"Отчёт AI",aiReportHint:"Решения менеджеров и расходы", "smtp.security":"Шифрование SMTP: starttls или ssl", "telegram.bot_token":"Токен Telegram-бота"},true,true);
+i18n.addResourceBundle("en","translation",{preferences:"My notifications",preferencesHint:"Channels and delivery history",aiReport:"AI report",aiReportHint:"Decisions and usage", "smtp.security":"SMTP encryption: starttls or ssl", "telegram.bot_token":"Telegram bot token"},true,true);

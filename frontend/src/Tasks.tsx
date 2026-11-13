@@ -1,3 +1,4 @@
+import { openConversation } from "./customer-api";
 import Markdown from "react-markdown";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -101,7 +102,12 @@ type Notice = {
   id: string;
   read_at: string | null;
   created_at: string;
-  payload: { number: number; title: string; text: string };
+  payload: {
+    number?: number;
+    conversation_id?: string;
+    title: string;
+    text: string;
+  };
 };
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const options = (items: { id: string; name: string }[] | undefined) =>
@@ -874,12 +880,15 @@ export function NotificationBell() {
             onClick={() => {
               void read([n.id]);
               setOpened(false);
-              openTask("T-" + n.payload.number);
+              if (n.payload.conversation_id)
+                openConversation(n.payload.conversation_id);
+              else if (n.payload.number) openTask("T-" + n.payload.number);
             }}
           >
             <small>{n.payload.text}</small>
             <b>
-              T-{n.payload.number} · {n.payload.title}
+              {n.payload.number ? "T-" + n.payload.number + " · " : ""}
+              {n.payload.title}
             </b>
             <small>{dateText(n.created_at)}</small>
           </button>

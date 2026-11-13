@@ -70,9 +70,25 @@ async def deliver_message(ctx, message_id):
         if not await ctx["redis"].set(channel_key, token, nx=True, ex=120):
             return
         with SessionLocal() as db:
-            msg = db.scalar(select(Message).where(Message.id == message_id).with_for_update())
+            initial = db.get(Message, message_id)
+            if not initial:
+                return
+            db.scalar(select(Conversation).where(Conversation.id == initial.conversation_id).with_for_update())
+            msg = db.scalar(select(Message).where(Message.id == message_id).with_for_update().execution_options(populate_existing=True))
             if not msg or msg.status not in ("queued", "retry"):
                 return
+            if msg.author_type == "ai" and not msg.send_started_at:
+                from app.models import AIDraft
+                from app.services.ai import auto_allowed
+                draft = db.scalar(select(AIDraft).where(AIDraft.message_id == msg.id))
+                conversation = db.get(Conversation, msg.conversation_id)
+                if not draft or not auto_allowed(db, draft, conversation):
+                    msg.status, msg.next_attempt_at, msg.error_code = "cancelled", None, "ai_superseded"
+                    if draft:
+                        draft.decision, draft.reason = "superseded", "policy_or_message_changed"
+                    db.commit()
+                    emit(conversations=[msg.conversation_id])
+                    return
             if msg.next_attempt_at and msg.next_attempt_at > now():
                 return
             # Preserve order in a conversation (file, then caption) and on a channel.

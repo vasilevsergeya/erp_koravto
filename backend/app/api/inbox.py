@@ -26,6 +26,7 @@ from app.models import (
     User,
     now,
 )
+from app.services.ai import supersede
 from app.services.customers import attach_conversation, structure_lock
 from app.services.onec_customers import connection_settings, customer_snapshot, refresh_customer
 from app.services.outbox import emit, error_text
@@ -319,6 +320,8 @@ def enqueue(db, conversation, body, user):
         created_at=timestamp,
         next_attempt_at=None if body.is_private_note else timestamp,
     )
+    if not body.is_private_note:
+        supersede(db, conversation.id, "manual_reply")
     db.add(msg)
     if attachment and body.text.strip() and not body.is_private_note:
         caption_id = str(uuid.uuid5(body.client_id, "caption"))

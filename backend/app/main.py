@@ -13,7 +13,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from starlette.responses import JSONResponse
 
-from app.api import auth, customers, inbox, settings, tasks, webhooks
+from app.api import ai, auth, customers, inbox, notifications, settings, tasks, webhooks
 from app.core.config import config
 from app.core.db import SessionLocal, engine
 from app.core.logging import configure_logging
@@ -46,6 +46,8 @@ for router in (
     inbox.router,
     tasks.router,
     customers.router,
+    ai.router,
+    notifications.router,
 ):
     app.include_router(router)
 

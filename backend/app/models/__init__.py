@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -16,6 +17,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
+from app.core.vector import Vector
 
 
 def uid() -> str:
@@ -34,6 +36,8 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="admin")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
+    notification_prefs: Mapped[dict] = mapped_column(JSONB, default=dict)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(30))
     totp_secret: Mapped[str | None] = mapped_column(Text)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     totp_counter: Mapped[int] = mapped_column(BigInteger, default=-1)
@@ -288,3 +292,84 @@ class CustomerEvent(Base):
     action: Mapped[str] = mapped_column(String(40))
     details: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class AIDraft(Base):
+    __tablename__ = "ai_drafts"
+    __table_args__ = (UniqueConstraint("inbound_id", "generation", name="uq_ai_generation"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    inbound_id: Mapped[str] = mapped_column(ForeignKey("messages.id"), index=True)
+    generation: Mapped[int] = mapped_column(Integer, default=1)
+    state: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    decision: Mapped[str] = mapped_column(String(20), default="pending")
+    intent: Mapped[str] = mapped_column(String(40), default="other")
+    language: Mapped[str] = mapped_column(String(20), default="")
+    entities: Mapped[dict] = mapped_column(JSONB, default=dict)
+    tool_calls: Mapped[list] = mapped_column(JSONB, default=list)
+    policy: Mapped[dict] = mapped_column(JSONB, default=dict)
+    body: Mapped[str] = mapped_column(Text, default="")
+    final_text: Mapped[str] = mapped_column(Text, default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    mode: Mapped[str] = mapped_column(String(20), default="draft")
+    source_hash: Mapped[str] = mapped_column(String(64), default="")
+    prompt_id: Mapped[str | None] = mapped_column(String(36))
+    message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id"))
+    decided_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    auto_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class AIPrompt(Base):
+    __tablename__ = "ai_prompts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    body: Mapped[str] = mapped_column(Text)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class AIUsage(Base):
+    __tablename__ = "ai_usage"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    draft_id: Mapped[str | None] = mapped_column(ForeignKey("ai_drafts.id"), index=True)
+    model: Mapped[str] = mapped_column(String(100))
+    purpose: Mapped[str] = mapped_column(String(20))
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Numeric(14, 8), default=0)
+    error: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class ApprovedExample(Base):
+    __tablename__ = "approved_examples"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    draft_id: Mapped[str] = mapped_column(ForeignKey("ai_drafts.id"), unique=True)
+    intent: Mapped[str] = mapped_column(String(40))
+    language: Mapped[str] = mapped_column(String(20))
+    question: Mapped[str] = mapped_column(Text)
+    reply: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list | None] = mapped_column(Vector())
+    embedding_model: Mapped[str] = mapped_column(String(100), default="")
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class NotificationDelivery(Base):
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        UniqueConstraint("notification_id", "channel", name="uq_notification_channel"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    notification_id: Mapped[str] = mapped_column(ForeignKey("notifications.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(20))
+    state: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(String(80))
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

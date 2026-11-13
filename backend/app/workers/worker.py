@@ -26,7 +26,9 @@ from app.models import (
     WebhookEvent,
     now,
 )
+from app.services.ai import queue_inbound, supersede
 from app.services.customers import attach_conversation, structure_lock
+from app.services.notifications import notify_inbound
 from app.services.onec_customers import refresh_customers_loop
 from app.services.outbox import deliver_message, status_forward
 from app.services.storage import download_attachment, save_file
@@ -106,6 +108,8 @@ async def process_webhook(ctx, event_id: str):
                     if existing.status == "error":
                         existing.error_code = safe_error(item)
                     existing.deleted = existing.deleted or bool(item.get("isDeleted"))
+                    if existing.direction == "in" and (item.get("isEdited") or item.get("isDeleted")):
+                        supersede(db, existing.conversation_id, "message_changed")
                     changed.add(existing.conversation_id)
                     continue
                 conversation = db.scalar(
@@ -180,6 +184,12 @@ async def process_webhook(ctx, event_id: str):
                 if inbound:
                     conversation.unread_count += 1
                 db.add(message)
+                db.flush()
+                if inbound:
+                    queue_inbound(db, conversation, message)
+                    notify_inbound(db, conversation, message)
+                else:
+                    supersede(db, conversation.id, "manual_reply")
                 if (
                     timestamp >= conversation.updated_at
                     or conversation.updated_at > now() - timedelta(seconds=2)

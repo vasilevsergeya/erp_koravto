@@ -166,3 +166,5 @@ websockets==17.4
     # via uvicorn
 yarl==1.25.1
     # via aiohttp
+
+langdetect==1.0.9

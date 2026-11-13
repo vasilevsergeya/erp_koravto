@@ -21,6 +21,8 @@ SETTING_SCHEMA = {
     "onec.base_url": ("string", False, ""),
     "onec.username": ("string", False, ""),
     "onec.password": ("string", True, ""),
+    "telegram.bot_token": ("string", True, ""),
+    "smtp.security": ("string", False, "starttls"),
     "smtp.host": ("string", False, ""),
     "smtp.port": ("integer", False, 587),
     "smtp.username": ("string", False, ""),

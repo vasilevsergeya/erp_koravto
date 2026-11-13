@@ -91,3 +91,6 @@ i18n.addResourceBundle("ru", "inbox", {
   status_inbound: "",
   status_note: "Только сотрудникам",
 });
+
+i18n.addResourceBundle("ru","inbox",{ai:"AI",status_cancelled:"Отменено"},true,true);
+i18n.addResourceBundle("en","inbox",{ai:"AI",status_cancelled:"Cancelled"},true,true);
