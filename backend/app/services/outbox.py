@@ -159,6 +159,12 @@ async def deliver_message(ctx, message_id):
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                 {"key": payload["channelId"] + ":" + payload["chatId"]},
             )
+            # Match inbox/AI lock order when a reply or cancellation arrives during delivery.
+            conversation = db.scalar(
+                select(Conversation)
+                .where(Conversation.id == conversation_id)
+                .with_for_update()
+            )
             msg = db.scalar(select(Message).where(Message.id == message_id).with_for_update())
             if not msg:
                 return
@@ -191,11 +197,6 @@ async def deliver_message(ctx, message_id):
                 msg.sent_at = now()
                 msg.error_code = receipt.error_code if receipt and msg.status == "error" else None
                 msg.next_attempt_at = None
-                conversation = db.scalar(
-                    select(Conversation)
-                    .where(Conversation.id == msg.conversation_id)
-                    .with_for_update()
-                )
                 if conversation and conversation.updated_at <= msg.created_at:
                     conversation.state = "waiting_customer"
             elif failure:
