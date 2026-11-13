@@ -736,6 +736,7 @@ export function AIReport() {
           week: string;
           intent: string;
           decision: string;
+          state: string;
           count: number;
         }[];
         recent: Draft[];
@@ -767,7 +768,7 @@ export function AIReport() {
           <Table>
             <Table.Thead>
               <Table.Tr>
-                {["Неделя", "Тип вопроса", "Решение", "Количество", "Доля"].map(
+                {["Неделя", "Тип вопроса", "Состояние", "Решение", "Количество", "Доля"].map(
                   (x) => (
                     <Table.Th key={x}>{x}</Table.Th>
                   ),
@@ -779,6 +780,7 @@ export function AIReport() {
                 <Table.Tr key={i}>
                   <Table.Td>{g.week.slice(0, 10)}</Table.Td>
                   <Table.Td>{intents[g.intent]}</Table.Td>
+                  <Table.Td>{states[g.state] || g.state}</Table.Td>
                   <Table.Td>{decisions[g.decision] || g.decision}</Table.Td>
                   <Table.Td>{g.count}</Table.Td>
                   <Table.Td>

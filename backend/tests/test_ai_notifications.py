@@ -36,6 +36,7 @@ from app.models import (
 from app.services.ai import (
     Classification,
     auto_allowed,
+    generate,
     index_example,
     policy_check,
     process_draft,
@@ -72,6 +73,22 @@ def classification(intent="shipping", **kwargs):
 
 
 class PolicyTests(unittest.TestCase):
+    def test_read_only_tool_limit_and_shipping_facts(self):
+        cfg = AIConfig()
+        c = Classification.model_validate(classification())
+        result = policy_check(
+            cfg, c, {"text": "We can help with your shipping question.", "language": "en"}, []
+        )
+        self.assertIn("shipping_not_configured", result["reasons"])
+        calls = [
+            {"type": "function_call", "name": "get_policies", "arguments": "{}", "call_id": str(n)}
+            for n in range(7)
+        ]
+        adapter = AsyncMock()
+        adapter.response.side_effect = [output(classification()), calls]
+        with self.assertRaisesRegex(AIError, "tool_limit"):
+            asyncio.run(generate(adapter, cfg, {}, "", []))
+
     def test_defaults_budget_schedule_and_price(self):
         cfg = AIConfig()
         self.assertTrue(all(v == ["draft", "draft"] for v in cfg.modes.values()))
@@ -425,6 +442,7 @@ class AIAcceptance(unittest.TestCase):
         report = self.client.get("/api/reports/ai")
         self.assertEqual(report.status_code, 200, report.text)
         self.assertTrue(report.json()["groups"])
+        self.assertIn("state", report.json()["groups"][0])
         csrf = self.client.headers.pop("X-CSRF-Token")
         self.assertEqual(self.client.post("/api/ai/prompts", json={"body": "bad"}).status_code, 403)
         self.client.headers["X-CSRF-Token"] = csrf

@@ -321,10 +321,11 @@ def report(
             week,
             AIDraft.intent,
             AIDraft.decision,
+            AIDraft.state,
             func.count(),
         )
         .where(AIDraft.created_at >= since)
-        .group_by(week, AIDraft.intent, AIDraft.decision)
+        .group_by(week, AIDraft.intent, AIDraft.decision, AIDraft.state)
     ).all()
     drafts = db.scalars(
         select(AIDraft)
@@ -339,7 +340,10 @@ def report(
         .limit(50)
     ).all()
     return {
-        "groups": [{"week": r[0], "intent": r[1], "decision": r[2], "count": r[3]} for r in rows],
+        "groups": [
+            {"week": r[0], "intent": r[1], "decision": r[2], "state": r[3], "count": r[4]}
+            for r in rows
+        ],
         "month_cost": month_spend(db, settings(db)),
         "recent": [describe(d) for d in drafts],
         "usage": [
