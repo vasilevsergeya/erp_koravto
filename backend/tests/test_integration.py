@@ -13,7 +13,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import func, select
 
 from app.api.auth import COOKIE
-from app.cli import seed_boards
+from app.cli import BOARDS, seed_boards
 from app.core.config import config
 from app.core.db import SessionLocal
 from app.core.security import hash_password, token_hash
@@ -206,9 +206,12 @@ class IntegrationTests(unittest.TestCase):
 
     def test_seed_boards_is_idempotent(self):
         with SessionLocal() as db:
+            before = {b.id: b.name for b in db.scalars(select(Board))}
             seed_boards(db)
-            self.assertEqual(db.scalar(select(func.count()).select_from(Board)), 3)
-        self.assertEqual(len(self.client.get("/api/boards").json()), 3)
+            after = {b.id: b.name for b in db.scalars(select(Board))}
+            self.assertEqual(before, after)
+            self.assertEqual(set(after.values()) & set(BOARDS), set(BOARDS))
+        self.assertEqual({b["id"] for b in self.client.get("/api/boards").json()}, set(after))
 
     def test_webhook_test_token_and_message_deduplication(self):
         path = "/api/webhooks/wazzup/" + self.token
