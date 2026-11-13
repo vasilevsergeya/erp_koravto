@@ -10,6 +10,9 @@ from app.models import AuditEvent, Setting
 
 # Secret classification is server-owned; API callers cannot change it.
 SETTING_SCHEMA = {
+    "tasks.timezone": ("string", False, "Asia/Seoul"),
+    "tasks.reminder_hour": ("integer", False, 9),
+    "tasks.workdays": ("string", False, "1,2,3,4,5"),
     "inbox.first_messages_per_hour": ("integer", False, 20),
     "inbox.auto_close_days": ("integer", False, 14),
     "wazzup.api_key": ("string", True, ""),

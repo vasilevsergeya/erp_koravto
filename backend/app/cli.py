@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from app.core.db import SessionLocal
 from app.core.security import hash_password
 from app.core.settings import invalidate_settings, put_setting
-from app.models import Board, LoginSession, Setting, User
+from app.models import Board, LoginSession, Setting, User, uid
 
 BOARDS = {
     "Закупки": ["Новая", "В работе", "Заказано", "Получено", "Готово", "Отменено"],
@@ -27,6 +27,7 @@ def seed_boards(db):
                     position=order,
                     statuses=[
                         {
+                            "id": uid(),
                             "name": status,
                             "position": position,
                             "terminal": status in ("Готово", "Отменено"),

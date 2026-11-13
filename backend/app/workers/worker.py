@@ -29,6 +29,7 @@ from app.models import (
 from app.services.onec_customers import refresh_customers_loop
 from app.services.outbox import deliver_message, status_forward
 from app.services.storage import download_attachment, save_file
+from app.services.tasks import overdue_reminders
 
 log = logging.getLogger("crm")
 
@@ -229,9 +230,13 @@ async def process_webhook(ctx, event_id: str):
 
 async def recover_pending(ctx):
     last_cleanup = 0.0
+    last_task_reminders = 0.0
     while True:
         try:
             await ctx["redis"].set("crm:worker:heartbeat", str(time.time()), ex=45)
+            if time.time() - last_task_reminders > 60:
+                await asyncio.to_thread(overdue_reminders)
+                last_task_reminders = time.time()
             with SessionLocal() as db:
                 pending = db.scalars(
                     select(WebhookEvent.id)

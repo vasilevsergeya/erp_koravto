@@ -16,7 +16,7 @@ from app.core.db import get_db
 from app.core.security import file_signer
 from app.core.settings import get_setting
 from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
-from app.models import Attachment, AuditEvent, Board, Conversation, Message, User, now
+from app.models import Attachment, AuditEvent, Conversation, Message, User, now
 from app.services.onec_customers import connection_settings, customer_snapshot, refresh_customer
 from app.services.outbox import emit, error_text
 from app.services.storage import MAX_FILE_SIZE, read_file, save_file
@@ -64,6 +64,7 @@ def describe_conversation(c, db):
         "ai_mode": c.ai_mode,
         "order_numbers": c.order_numbers,
         "unread_count": c.unread_count,
+        "task_updated": c.task_updated,
         "last_message": last.body[:120] if last else "",
         "last_status": last.status if last else "",
     }
@@ -445,6 +446,7 @@ def change_conversation(
 def mark_read(conversation_id: str, user=Depends(current_user), db: Session = Depends(get_db)):
     c = locked_conversation(db, conversation_id)
     c.unread_count = 0
+    c.task_updated = False
     db.commit()
     return {"ok": True}
 
@@ -493,16 +495,8 @@ def team(user=Depends(current_user), db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/boards")
-def boards(user=Depends(current_user), db: Session = Depends(get_db)):
-    return [
-        {"id": b.id, "name": b.name, "statuses": b.statuses}
-        for b in db.scalars(select(Board).order_by(Board.position))
-    ]
-
-
 @router.post("/uploads", status_code=201)
-def upload(file: UploadFile = File(), user=Depends(writer), db: Session = Depends(get_db)):
+def upload(file: UploadFile = File(), user=Depends(current_user), db: Session = Depends(get_db)):
     content = file.file.read(MAX_FILE_SIZE + 1)
     if not content or len(content) > MAX_FILE_SIZE:
         raise HTTPException(400, "Файл должен быть непустым и не больше 10 МБ")

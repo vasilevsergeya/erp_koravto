@@ -21,6 +21,8 @@ import {
   type User,
 } from "./api";
 import "./inbox.css";
+import {ConversationTasks} from "./Tasks";
+import {taskLabel} from "./task-i18n";
 
 type Channel = {
   channelId: string;
@@ -48,7 +50,8 @@ const errorText = (error: unknown) =>
 export function Inbox({ user }: { user: User }) {
   const { t } = useTranslation("inbox");
   const query = useQueryClient();
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(() => sessionStorage.getItem('crm-open-conversation'));
+  useEffect(() => {sessionStorage.removeItem('crm-open-conversation');const show=(event:Event)=>setSelected((event as CustomEvent<string>).detail);window.addEventListener('crm:conversation',show);return()=>window.removeEventListener('crm:conversation',show);},[]);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -318,6 +321,7 @@ export function Inbox({ user }: { user: User }) {
     ? onec.clients[0].name : c?.display_name || c?.name || c?.phone;
   const customerCard = (
     <div className="crm-customer-content">
+      {c && <ConversationTasks conversation={c}/>}
       <h3>{t("customer")}</h3>
       <TextInput
         label={t("chatName")}
@@ -486,6 +490,7 @@ export function Inbox({ user }: { user: User }) {
                 <small>{time(item.updated_at)}</small>
               </div>
               <p>{item.last_message || t("attachment")}</p>
+              {item.task_updated && <Badge size="xs" color="orange">{taskLabel("taskUpdate")}</Badge>}
               <div>
                 <span>{t(item.state)}</span>
                 {item.unread_count > 0 && (
@@ -582,7 +587,7 @@ export function Inbox({ user }: { user: User }) {
                 <article
                   className={
                     "crm-message " +
-                    (m.is_private_note
+                    (m.author_type === "system" ? "system" : m.is_private_note
                       ? "private"
                       : m.direction === "out"
                         ? "out"
@@ -592,7 +597,7 @@ export function Inbox({ user }: { user: User }) {
                   key={m.id}
                 >
                   <div className="crm-message-author">
-                    {m.is_private_note
+                    {m.author_type === "system" ? taskLabel("system") : m.is_private_note
                       ? t("privateNote")
                       : m.author_name || t(m.author_type)}
                     {m.edited && " · " + t("edited")}

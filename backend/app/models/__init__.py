@@ -6,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Identity,
     Integer,
     String,
     Text,
@@ -75,6 +76,7 @@ class Board(Base):
     name: Mapped[str] = mapped_column(String(80), unique=True)
     position: Mapped[int] = mapped_column(Integer)
     statuses: Mapped[list] = mapped_column(JSONB)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class WebhookEvent(Base):
@@ -113,6 +115,7 @@ class Conversation(Base):
     onec_next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     onec_error: Mapped[str | None] = mapped_column(String(40))
     unread_count: Mapped[int] = mapped_column(Integer, default=0)
+    task_updated: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
@@ -167,3 +170,68 @@ class DeliveryReceipt(Base):
     status: Mapped[str] = mapped_column(String(40))
     error_code: Mapped[str | None] = mapped_column(String(100))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class TaskType(Base):
+    __tablename__ = "task_types"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    number: Mapped[int] = mapped_column(BigInteger, Identity(start=1001), unique=True)
+    client_id: Mapped[str] = mapped_column(String(36), unique=True)
+    board_id: Mapped[str] = mapped_column(ForeignKey("boards.id"), index=True)
+    status_id: Mapped[str] = mapped_column(String(36), index=True)
+    type_id: Mapped[str] = mapped_column(ForeignKey("task_types.id"))
+    title: Mapped[str] = mapped_column(String(250))
+    description: Mapped[str] = mapped_column(Text, default="")
+    priority: Mapped[str] = mapped_column(String(20), default="normal")
+    author_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    assignee_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
+    order_no: Mapped[str] = mapped_column(String(100), default="")
+    part_no: Mapped[str] = mapped_column(String(100), default="")
+    quantity: Mapped[int | None] = mapped_column(Integer)
+    labels: Mapped[list] = mapped_column(JSONB, default=list)
+    watchers: Mapped[list] = mapped_column(JSONB, default=list)
+    attachment_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TaskComment(Base):
+    __tablename__ = "task_comments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    author_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    body: Mapped[str] = mapped_column(Text)
+    mentions: Mapped[list] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class TaskHistory(Base):
+    __tablename__ = "task_history"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    changes: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[dict] = mapped_column(JSONB)
+    dedupe_key: Mapped[str | None] = mapped_column(String(180), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

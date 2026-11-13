@@ -1,3 +1,5 @@
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -41,10 +43,21 @@ def update_setting(
     if key not in SETTING_SCHEMA:
         raise HTTPException(404, "Настройка не найдена")
     kind, secret, _ = SETTING_SCHEMA[key]
-    if kind == "integer" and (type(body.value) is not int or not 1 <= body.value <= 65535):
+    minimum, maximum = (0, 23) if key == "tasks.reminder_hour" else (1, 65535)
+    if kind == "integer" and (type(body.value) is not int or not minimum <= body.value <= maximum):
         raise HTTPException(400, "Укажите целое число от 1 до 65535")
     if kind == "string" and (not isinstance(body.value, str) or len(body.value) > 8192):
         raise HTTPException(400, "Некорректное значение")
+    if key == "tasks.timezone":
+        try:
+            ZoneInfo(str(body.value))
+        except (ValueError, ZoneInfoNotFoundError):
+            raise HTTPException(400, "Неизвестный часовой пояс") from None
+    if key == "tasks.workdays":
+        days = str(body.value).replace(" ", "").split(",")
+        if not days or any(day not in list("1234567") for day in days):
+            raise HTTPException(400, "Укажите номера рабочих дней через запятую: 1–7")
+        body.value = ",".join(sorted(set(days)))
     if key == "onec.base_url" and body.value:
         try:
             body.value = customer_endpoint(str(body.value))
