@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -66,13 +66,6 @@ export function Inbox({ user }: { user: User }) {
       new URLSearchParams(location.search).get("conversation") ||
       sessionStorage.getItem(`crm-active-conversation:${user.id}`),
   );
-  useEffect(() => {
-    sessionStorage.removeItem("crm-open-conversation");
-    const show = (event: Event) =>
-      setSelected((event as CustomEvent<string>).detail);
-    window.addEventListener("crm:conversation", show);
-    return () => window.removeEventListener("crm:conversation", show);
-  }, []);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -253,7 +246,7 @@ export function Inbox({ user }: { user: User }) {
     )
       end.current?.scrollIntoView({ block: "end" });
   }, [lastId]);
-  function choose(id: string | null) {
+  const choose = useCallback((id: string | null) => {
     if (selected)
       drafts.current[selected] = {
         text: message,
@@ -275,7 +268,13 @@ export function Inbox({ user }: { user: User }) {
     setSendId(draft?.sendId || crypto.randomUUID());
     setError("");
     setCustomerError("");
-  }
+  }, [selected, message, file, attachment, note, quoted, sendId, user.id]);
+  useEffect(() => {
+    sessionStorage.removeItem("crm-open-conversation");
+    const show = (event: Event) => choose((event as CustomEvent<string>).detail);
+    window.addEventListener("crm:conversation", show);
+    return () => window.removeEventListener("crm:conversation", show);
+  }, [choose]);
   async function send() {
     if (!selected || busy) return;
     setBusy(true);
