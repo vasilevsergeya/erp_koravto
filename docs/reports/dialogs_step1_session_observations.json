@@ -1,0 +1,102 @@
+{
+  "period_moscow": "16.11.2026, 19:02–19:32 МСК",
+  "elapsed_minutes": 30.587083333333332,
+  "result_ru": "Выполнен: за 30 минут на обновлённой версии плашки «Войдите в систему» и переход на вход не появились.",
+  "samples": [
+    {
+      "at": "2026-11-16T16:01:59.449Z",
+      "loginPrompt": false,
+      "alerts": []
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:06:48.016Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:10:36.530Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:13:04.515Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:15:18.936Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:16:31.560Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:18:51.067Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:19:57.703Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:22:07.717Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:23:12.960Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:25:11.122Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:26:36.418Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:28:07.454Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:30:06.966Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:31:12.955Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    },
+    {
+      "alerts": [],
+      "at": "2026-11-16T16:32:34.674Z",
+      "dialogOpen": true,
+      "loginPrompt": false
+    }
+  ]
+}

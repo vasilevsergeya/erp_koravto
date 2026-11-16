@@ -1,0 +1,86 @@
+{
+  "site": "https://erp.korean.parts",
+  "step": 1,
+  "date": "2026-11-16",
+  "method": "Read-only DOM getBoundingClientRect; Chrome DevTools is blocked by browser policy",
+  "viewport": {
+    "width": 1363,
+    "height": 936,
+    "scale": 1,
+    "devicePixelRatio": 1
+  },
+  "required_viewports_verified": false,
+  "measurements_px": [
+    [
+      "topbar",
+      72,
+      72
+    ],
+    [
+      "page_heading_with_spacing",
+      137.734375,
+      137.734375
+    ],
+    [
+      "left_column_before_list",
+      326.515625,
+      229.140625
+    ],
+    [
+      "dialog_row_min",
+      95.234375,
+      95.234375
+    ],
+    [
+      "dialog_row_max",
+      111.734375,
+      111.734375
+    ],
+    [
+      "visible_dialog_list",
+      387.484375,
+      484.859375
+    ],
+    [
+      "thread_header",
+      72.84375,
+      72.84375
+    ],
+    [
+      "message_feed",
+      59.25,
+      59.25
+    ],
+    [
+      "one_word_message",
+      118.59375,
+      118.59375
+    ],
+    [
+      "ai_assistant",
+      393.109375,
+      393.109375
+    ],
+    [
+      "composer",
+      218.796875,
+      218.796875
+    ],
+    [
+      "translation_preferences",
+      457.78125,
+      457.78125
+    ],
+    [
+      "document_height",
+      988,
+      988
+    ]
+  ],
+  "columns": [
+    "block",
+    "before",
+    "after"
+  ],
+  "note": "Layout is unchanged in step 1; the false queue alert disappeared and released 97.375 px to the list. Target compact AI state belongs to step 3."
+}
