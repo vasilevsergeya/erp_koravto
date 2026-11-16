@@ -671,7 +671,13 @@ function CustomerView({
   );
 }
 
-export function CustomerSidebar({ id }: { id: string }) {
+export function CustomerSidebar({
+  id,
+  compact = false,
+}: {
+  id: string;
+  compact?: boolean;
+}) {
   const { t } = useTranslation("customers");
   const data = useQuery({
     queryKey: ["customer", id],
@@ -681,7 +687,18 @@ export function CustomerSidebar({ id }: { id: string }) {
   return (
     <section className="customer-sidebar">
       {data.error && <Alert color="red">{err(data.error)}</Alert>}
-      <h3 dir="auto">{data.data?.display_name || t("profile")}</h3>
+      {compact ? (
+        <button
+          className="crm-customer-name"
+          title={`${t("conversations")}: ${data.data?.conversation_count ?? "…"} · ${t("tasks")}: ${data.data?.open_tasks ?? "…"}`}
+          onClick={() => openCustomer(id)}
+          dir="auto"
+        >
+          {data.data?.display_name || t("profile")}
+        </button>
+      ) : (
+        <h3 dir="auto">{data.data?.display_name || t("profile")}</h3>
+      )}
       <div className="customer-tags">
         {data.data?.tags.map((tag) => (
           <Badge key={tag} variant="light">
@@ -689,13 +706,17 @@ export function CustomerSidebar({ id }: { id: string }) {
           </Badge>
         ))}
       </div>
-      <p>
-        {t("conversations")}: {data.data?.conversation_count ?? "…"} ·{" "}
-        {t("tasks")}: {data.data?.open_tasks ?? "…"}
-      </p>
-      <Button variant="light" fullWidth onClick={() => openCustomer(id)}>
-        {t("open")}
-      </Button>
+      {!compact && (
+        <>
+          <p>
+            {t("conversations")}: {data.data?.conversation_count ?? "…"} ·{" "}
+            {t("tasks")}: {data.data?.open_tasks ?? "…"}
+          </p>
+          <Button variant="light" fullWidth onClick={() => openCustomer(id)}>
+            {t("open")}
+          </Button>
+        </>
+      )}
     </section>
   );
 }

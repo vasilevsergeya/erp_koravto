@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -91,12 +91,45 @@ function refresh(query: ReturnType<typeof useQueryClient>) {
     void query.invalidateQueries({ queryKey: [key] });
 }
 
+function sourceSummary(name: string, result: unknown): string {
+  const value =
+    result && typeof result === "object"
+      ? (result as Record<string, unknown>)
+      : {};
+  const labels: Record<string, string> = {
+    get_stock: "Остатки",
+    get_orders: "Заказы клиента",
+    get_order: "Заказ",
+    get_customer_context: "Данные клиента",
+    quote_price: "Расчёт цены",
+    search_examples: "Примеры ответов",
+    get_policies: "Правила компании",
+  };
+  const label = labels[name] || "Источник";
+  if (value.status === "source_not_connected") {
+    const numbers = Array.isArray(value.known_order_numbers)
+      ? value.known_order_numbers.filter(
+          (v): v is string => typeof v === "string",
+        )
+      : [];
+    return name === "get_stock"
+      ? "Остатки: источник 1С не подключён"
+      : numbers.length
+        ? `${label}: известны номера ${numbers.join(", ")}; подробности недоступны`
+        : `${label}: не найдены; источник подробностей не подключён`;
+  }
+  if (value.status === "ok") return `${label}: данные получены`;
+  return `${label}: данные недоступны`;
+}
+
 export function DraftPanel({
   conversationId,
   canWrite,
+  isAdmin = false,
 }: {
   conversationId: string;
   canWrite: boolean;
+  isAdmin?: boolean;
 }) {
   const { t } = useTranslation("v1");
   const query = useQueryClient();
@@ -115,13 +148,50 @@ export function DraftPanel({
     [rejecting, setRejecting] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [opened, setOpened] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const outside = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !panelRef.current?.contains(event.target)
+      )
+        setOpened(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, []);
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (event.altKey && event.code === "KeyA") {
+        event.preventDefault();
+        setOpened((value) => !value);
+      } else if (event.key === "Escape") setOpened(false);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
   const d = data.data?.item;
+  const pending = d?.decision === "pending";
+  const warningLabels = [
+    ...new Set(
+      [...(d?.policy.reasons || []), d?.reason || ""]
+        .filter(Boolean)
+        .map((reason) => reasons[reason] || reason),
+    ),
+  ];
+  const draftState = data.isLoading
+    ? "Готовится…"
+    : !pending
+      ? "Черновика нет"
+      : states[d.state] || d.state;
   async function act(path: string, body?: unknown) {
     setBusy(true);
     setError("");
     try {
       await api(path, "POST", body);
       refresh(query);
+      if (/\/(send|send-edited|reject)$/.test(path)) setOpened(false);
       return true;
     } catch (e) {
       setError(fail(e));
@@ -130,194 +200,230 @@ export function DraftPanel({
       setBusy(false);
     }
   }
-  if (data.isLoading) return null;
   return (
-    <section className="ai-draft" aria-label="AI-черновик">
-      <div className="ai-heading">
+    <section
+      ref={panelRef}
+      className="ai-draft ai-draft-compact"
+      aria-label="AI-черновик"
+    >
+      <button
+        className="ai-draft-toggle"
+        type="button"
+        aria-expanded={opened}
+        aria-controls={"ai-panel-" + conversationId}
+        title="AI-помощник · Alt+A"
+        onClick={() => setOpened(!opened)}
+      >
         <b>AI-помощник</b>
-        <Badge variant="light">
-          {d
-            ? states[d.state] || d.state
-            : data.data?.configured
-              ? "Нет черновика"
-              : "Ключ OpenAI не настроен"}
-        </Badge>
-        {d && (
-          <small>
-            {intents[d.intent]} · {d.language} · {decisions[d.decision]}
-          </small>
+        <span className={"ai-line-state " + (pending ? d.state : "empty")}>
+          {draftState}
+        </span>
+        <span className="ai-line-preview" dir="auto">
+          {pending ? d.body : ""}
+        </span>
+        {!pending && canWrite && data.data?.configured && data.data.enabled && (
+          <span className="ai-prepare-hint">Подготовить</span>
         )}
-      </div>
-      {(error || data.error) && (
-        <Alert color="red">{error || fail(data.error)}</Alert>
-      )}
-      {d?.auto_at && d.decision === "pending" && (
-        <Alert color="orange">
-          Автоответ ожидает отправки. Нажмите «Изменить», чтобы остановить его и
-          проверить текст.
-        </Alert>
-      )}
-      {d?.body && (
-        <details open={d.decision === "pending"}>
-          <summary>Текст и проверка</summary>
-          <div className="ai-draft-body" dir="auto">
-            {d.body}
-          </div>
-          {d.policy.reasons?.map((r) => (
-            <small className="ai-warning" key={r}>
-              {reasons[r] || r}
-            </small>
-          ))}
-          {d.reason && (
-            <small className="ai-warning">
-              {reasons[d.reason] || d.reason}
-            </small>
-          )}
-        </details>
-      )}
-      {!!d?.tool_calls.length && (
-        <details>
-          <summary>{t("sources")}</summary>
-          {d.tool_calls.map((call, i) => (
-            <div key={i}>
-              <b>{call.name}</b>
-              <pre
-                style={{
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                  fontSize: 12,
-                }}
-              >
-                {JSON.stringify(call.result, null, 2)}
-              </pre>
-            </div>
-          ))}
-        </details>
-      )}
-      {canWrite &&
-        d &&
-        d.decision === "pending" &&
-        ["ready", "escalated"].includes(d.state) && (
-          <>
-            <div className="ai-actions">
-              <Button
-                size="xs"
-                loading={busy}
-                onClick={() => void act("/api/drafts/" + d.id + "/send", {})}
-              >
-                Отправить как есть
-              </Button>
-              <Button
-                size="xs"
-                variant="light"
-                disabled={busy}
-                onClick={async () => {
-                  if (await act("/api/drafts/" + d.id + "/pause")) {
-                    setEditing(d.id);
-                    setAnswer(d.body);
-                  }
-                }}
-              >
-                Изменить
-              </Button>
-              <Button
-                size="xs"
-                variant="subtle"
-                color="gray"
-                onClick={async () => {
-                  if (await act("/api/drafts/" + d.id + "/pause"))
-                    setRejecting(true);
-                }}
-              >
-                Отклонить
-              </Button>
-            </div>
-            {editing === d.id && (
-              <div className="ai-edit">
-                <Textarea
-                  label="Правка AI-ответа"
-                  value={answer}
-                  onChange={(e) => setAnswer(e.currentTarget.value)}
-                  autosize
-                  minRows={3}
-                  maxRows={8}
-                  maxLength={10000}
-                />
-                <Button
-                  size="xs"
-                  loading={busy}
-                  onClick={async () => {
-                    if (
-                      await act("/api/drafts/" + d.id + "/send-edited", {
-                        final_text: answer,
-                      })
-                    )
-                      setEditing(null);
-                  }}
-                >
-                  Отправить с правкой
-                </Button>
-                <Button
-                  size="xs"
-                  variant="subtle"
-                  onClick={() => setEditing(null)}
-                >
-                  Закрыть
-                </Button>
-              </div>
-            )}
-            {rejecting && (
-              <div className="ai-edit">
-                <Select
-                  label={t("rejectReason")}
-                  value={category}
-                  onChange={setCategory}
-                  data={["incorrect", "irrelevant", "tone", "other"].map(
-                    (value) => ({ value, label: t(value) }),
-                  )}
-                />
-                <TextInput
-                  label={t("comment")}
-                  value={reason}
-                  onChange={(e) => setReason(e.currentTarget.value)}
-                />
-                <Button
-                  size="xs"
-                  disabled={
-                    !category || (category === "other" && !reason.trim())
-                  }
-                  loading={busy}
-                  onClick={async () => {
-                    if (
-                      await act("/api/drafts/" + d.id + "/reject", {
-                        reason,
-                        category,
-                      })
-                    ) {
-                      setRejecting(false);
-                      setReason("");
-                    }
-                  }}
-                >
-                  Подтвердить отклонение
-                </Button>
-              </div>
-            )}
-          </>
-        )}
-      {canWrite && data.data?.configured && data.data.enabled && (
-        <Button
-          size="xs"
-          variant="subtle"
-          disabled={busy || d?.state === "generating" || d?.state === "queued"}
-          onClick={() =>
-            void act(
-              "/api/conversations/" + conversationId + "/draft/regenerate",
-            )
-          }
+      </button>
+      {opened && (
+        <div
+          id={"ai-panel-" + conversationId}
+          className="ai-draft-panel"
+          role="region"
+          aria-label="Панель AI-помощника"
         >
-          Подготовить заново
-        </Button>
+          <div className="ai-heading">
+            <b>AI-помощник</b>
+            <Badge variant="light">
+              {d
+                ? states[d.state] || d.state
+                : data.data?.configured
+                  ? "Нет черновика"
+                  : "Ключ OpenAI не настроен"}
+            </Badge>
+            {d && (
+              <small>
+                {intents[d.intent]} · {d.language} · {decisions[d.decision]}
+              </small>
+            )}
+          </div>
+          {(error || data.error) && (
+            <Alert color="red">{error || fail(data.error)}</Alert>
+          )}
+          {d?.auto_at && d.decision === "pending" && (
+            <Alert color="orange">
+              Автоответ ожидает отправки. Нажмите «Изменить», чтобы остановить
+              его и проверить текст.
+            </Alert>
+          )}
+          {d?.body && (
+            <details open={d.decision === "pending"}>
+              <summary>Текст и проверка</summary>
+              <div className="ai-draft-body" dir="auto">
+                {d.body}
+              </div>
+              {warningLabels.map((label) => (
+                <small className="ai-warning" key={label}>
+                  {label}
+                </small>
+              ))}
+            </details>
+          )}
+          {!!d?.tool_calls.length && (
+            <details>
+              <summary>{t("sources")}</summary>
+              {d.tool_calls.map((call, i) => (
+                <div key={i}>
+                  <p>{sourceSummary(call.name, call.result)}</p>
+                  {isAdmin && (
+                    <details>
+                      <summary>Подробности</summary>
+                      <pre
+                        style={{
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                          fontSize: 12,
+                        }}
+                      >
+                        {JSON.stringify(call.result, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+              ))}
+            </details>
+          )}
+          {canWrite &&
+            d &&
+            d.decision === "pending" &&
+            ["ready", "escalated"].includes(d.state) && (
+              <>
+                <div className="ai-actions">
+                  <Button
+                    size="xs"
+                    loading={busy}
+                    onClick={() =>
+                      void act("/api/drafts/" + d.id + "/send", {})
+                    }
+                  >
+                    Отправить как есть
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (await act("/api/drafts/" + d.id + "/pause")) {
+                        setEditing(d.id);
+                        setAnswer(d.body);
+                      }
+                    }}
+                  >
+                    Изменить
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    color="gray"
+                    onClick={async () => {
+                      if (await act("/api/drafts/" + d.id + "/pause"))
+                        setRejecting(true);
+                    }}
+                  >
+                    Отклонить
+                  </Button>
+                </div>
+                {editing === d.id && (
+                  <div className="ai-edit">
+                    <Textarea
+                      label="Правка AI-ответа"
+                      value={answer}
+                      onChange={(e) => setAnswer(e.currentTarget.value)}
+                      autosize
+                      minRows={3}
+                      maxRows={8}
+                      maxLength={10000}
+                    />
+                    <Button
+                      size="xs"
+                      loading={busy}
+                      onClick={async () => {
+                        if (
+                          await act("/api/drafts/" + d.id + "/send-edited", {
+                            final_text: answer,
+                          })
+                        )
+                          setEditing(null);
+                      }}
+                    >
+                      Отправить с правкой
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      onClick={() => setEditing(null)}
+                    >
+                      Закрыть
+                    </Button>
+                  </div>
+                )}
+                {rejecting && (
+                  <div className="ai-edit">
+                    <Select
+                      comboboxProps={{ withinPortal: false }}
+                      label={t("rejectReason")}
+                      value={category}
+                      onChange={setCategory}
+                      data={["incorrect", "irrelevant", "tone", "other"].map(
+                        (value) => ({ value, label: t(value) }),
+                      )}
+                    />
+                    <TextInput
+                      label={t("comment")}
+                      value={reason}
+                      onChange={(e) => setReason(e.currentTarget.value)}
+                    />
+                    <Button
+                      size="xs"
+                      disabled={
+                        !category || (category === "other" && !reason.trim())
+                      }
+                      loading={busy}
+                      onClick={async () => {
+                        if (
+                          await act("/api/drafts/" + d.id + "/reject", {
+                            reason,
+                            category,
+                          })
+                        ) {
+                          setRejecting(false);
+                          setReason("");
+                        }
+                      }}
+                    >
+                      Подтвердить отклонение
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          {canWrite && data.data?.configured && data.data.enabled && (
+            <Button
+              size="xs"
+              variant="subtle"
+              disabled={
+                busy || d?.state === "generating" || d?.state === "queued"
+              }
+              onClick={() =>
+                void act(
+                  "/api/conversations/" + conversationId + "/draft/regenerate",
+                )
+              }
+            >
+              Подготовить заново
+            </Button>
+          )}
+        </div>
       )}
     </section>
   );

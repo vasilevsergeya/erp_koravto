@@ -154,12 +154,53 @@ const { chromium } = require("playwright"),
     list: document.querySelector(".crm-dialog-list").clientHeight,
     thread: document.querySelector(".crm-thread").clientHeight,
     messages: document.querySelector(".crm-messages").clientHeight,
+    assistant: document
+      .querySelector(".crm-assistant-row")
+      .getBoundingClientRect().height,
+    composer: document.querySelector(".crm-composer").getBoundingClientRect()
+      .height,
   }));
   assert.equal(metrics.topbar, 40);
   assert.equal(metrics.row, 52);
   assert.ok(metrics.message <= 44);
   assert.equal(metrics.document, 768);
   assert.ok(metrics.list / 52 >= 10);
+  assert.ok(metrics.assistant <= 36);
+  assert.ok(metrics.composer <= 100);
+  assert.ok(metrics.messages / metrics.thread >= 0.6);
+  await page.keyboard.press("Alt+a");
+  await page.getByRole("region", { name: "Панель AI-помощника" }).waitFor();
+  const expandedHeight = await page
+    .locator(".crm-messages")
+    .evaluate((el) => el.clientHeight);
+  assert.equal(
+    expandedHeight,
+    metrics.messages,
+    "AI panel must overlay the timeline",
+  );
+  await page.keyboard.press("Escape");
+  await page
+    .getByRole("region", { name: "Панель AI-помощника" })
+    .waitFor({ state: "hidden" });
+  const editor = page.locator(".crm-editor textarea");
+  await editor.fill(
+    Array.from({ length: 12 }, (_, i) => `Line ${i + 1}`).join("\n"),
+  );
+  const inputSize = await editor.evaluate((el) => ({
+    height: el.clientHeight,
+    scroll: el.scrollHeight,
+  }));
+  assert.ok(
+    inputSize.height <= 160,
+    "Editor grows to at most seven text lines plus padding",
+  );
+  assert.ok(inputSize.scroll > inputSize.height);
+  await editor.fill("");
+  assert.ok(
+    (await page
+      .locator(".crm-composer")
+      .evaluate((el) => el.getBoundingClientRect().height)) <= 100,
+  );
   for (const count of [100, 142]) {
     await page
       .locator(".crm-dialog-list")

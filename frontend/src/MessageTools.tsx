@@ -39,6 +39,14 @@ export const languages = [
   ["nl", "Nederlands"],
 ].map(([value, label]) => ({ value, label }));
 
+export function languageName(code: string): string {
+  try {
+    return new Intl.DisplayNames(["ru"], { type: "language" }).of(code) || code;
+  } catch {
+    return code;
+  }
+}
+
 export function LinkedText({ text }: { text: string }) {
   const parts = text.split(/((?:https?:\/\/|www\.)[^\s<>]+)/giu);
   return (
@@ -102,6 +110,7 @@ export function TranslationFields({
         }
       />
       <Select
+        comboboxProps={{ withinPortal: false }}
         label="Язык клиента"
         data={languages}
         value={value.translation_client_language || "en"}
@@ -110,6 +119,7 @@ export function TranslationFields({
         onChange={(v) => v && onChange({ translation_client_language: v })}
       />
       <Select
+        comboboxProps={{ withinPortal: false }}
         label="Язык менеджера"
         data={languages}
         value={value.translation_manager_language || "ru"}
@@ -117,10 +127,6 @@ export function TranslationFields({
         disabled={disabled}
         onChange={(v) => v && onChange({ translation_manager_language: v })}
       />
-      <small>
-        Входящие: язык клиента → язык менеджера. Исходящие: язык менеджера →
-        язык клиента.
-      </small>
     </Stack>
   );
 }
@@ -173,9 +179,13 @@ export function TranslationPreferences({
   return (
     <Popover position="bottom-end" width={300} withinPortal shadow="md">
       <Popover.Target>
-        <Button size="xs" variant="subtle" title="Настройки перевода">
+        <Button
+          size="xs"
+          variant="subtle"
+          title="Входящие: язык клиента → язык менеджера. Исходящие: язык менеджера → язык клиента."
+        >
           {enabled
-            ? `${value?.translation_client_language || "авто"} → ${value?.translation_manager_language || "en"}`
+            ? `${languageName(value?.translation_client_language || "en")} → ${languageName(value?.translation_manager_language || "ru")}`
             : "Перевод: выкл"}
         </Button>
       </Popover.Target>

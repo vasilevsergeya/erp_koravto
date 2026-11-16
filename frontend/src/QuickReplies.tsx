@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Modal,
+  Popover,
   Select,
   Textarea,
   TextInput,
@@ -164,70 +165,87 @@ export function QuickReplyPicker({
   const slash = text.startsWith("/") && !text.includes("\n");
   const search = slash ? text.slice(1).toLocaleLowerCase() : "";
   return (
-    <>
-      <Button size="xs" variant="subtle" onClick={() => setOpen(true)}>
-        {t("quickReplies")} /
-      </Button>
-      {(open || slash) && (
-        <div className="quick-reply-picker">
+    <Popover
+      opened={open || slash}
+      onChange={(value) => {
+        setOpen(value);
+        if (!value && slash) onInsert("");
+      }}
+      position="top-end"
+      width={320}
+      withinPortal
+      shadow="md"
+    >
+      <Popover.Target>
+        <Button
+          size="xs"
+          variant="subtle"
+          title="Быстрые ответы · /"
+          onClick={() => setOpen(!open)}
+        >
+          {t("quickReplies")}
+        </Button>
+      </Popover.Target>
+      <Popover.Dropdown className="quick-reply-picker">
+        <Select
+          comboboxProps={{ withinPortal: false }}
+          searchable
+          label={t("quickReplies")}
+          value={selected}
+          data={(data.data || [])
+            .filter(
+              (r) => !search || r.title.toLocaleLowerCase().includes(search),
+            )
+            .map((r) => ({ value: r.id, label: r.title }))}
+          onChange={(v) => {
+            setSelected(v);
+            setOrder(
+              conversation.order_numbers.length === 1
+                ? conversation.order_numbers[0]
+                : null,
+            );
+          }}
+        />
+        {needsOrder && (
           <Select
-            searchable
-            label={t("quickReplies")}
-            value={selected}
-            data={(data.data || [])
-              .filter(
-                (r) => !search || r.title.toLocaleLowerCase().includes(search),
-              )
-              .map((r) => ({ value: r.id, label: r.title }))}
-            onChange={(v) => {
-              setSelected(v);
-              setOrder(
-                conversation.order_numbers.length === 1
-                  ? conversation.order_numbers[0]
-                  : null,
-              );
-            }}
+            comboboxProps={{ withinPortal: false }}
+            label={t("order")}
+            value={order}
+            data={conversation.order_numbers}
+            onChange={setOrder}
           />
-          {needsOrder && (
-            <Select
-              label={t("order")}
-              value={order}
-              data={conversation.order_numbers}
-              onChange={setOrder}
-            />
-          )}
-          {reply && (
-            <>
-              <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                {expanded}
-              </p>
-              {!ready && <p>{t("missingPlaceholder")}</p>}
-              <Button
-                size="xs"
-                disabled={!ready}
-                onClick={() => {
-                  onInsert((slash ? "" : text ? text + "\n" : "") + expanded);
-                  setOpen(false);
-                  setSelected(null);
-                }}
-              >
-                {t("insert")}
-              </Button>
-            </>
-          )}
-          {data.error && <Alert color="red">{fail(data.error)}</Alert>}
-          <Button
-            size="xs"
-            variant="subtle"
-            onClick={() => {
-              setOpen(false);
-              if (slash) onInsert("");
-            }}
-          >
-            {t("close")}
-          </Button>
-        </div>
-      )}
-    </>
+        )}
+        {reply && (
+          <>
+            <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+              {expanded}
+            </p>
+            {!ready && <p>{t("missingPlaceholder")}</p>}
+            <Button
+              size="xs"
+              disabled={!ready}
+              onClick={() => {
+                onInsert((slash ? "" : text ? text + "\n" : "") + expanded);
+                setOpen(false);
+                setSelected(null);
+              }}
+            >
+              {t("insert")}
+            </Button>
+          </>
+        )}
+        {data.error && <Alert color="red">{fail(data.error)}</Alert>}
+        <Button
+          size="xs"
+          variant="subtle"
+          onClick={() => {
+            setOpen(false);
+            if (slash) onInsert("");
+          }}
+        >
+          {t("close")}
+        </Button>
+      </Popover.Dropdown>
+    </Popover>
   );
 }

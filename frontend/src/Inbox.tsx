@@ -16,7 +16,7 @@ import {
   Badge,
   Button,
   Checkbox,
-  FileInput,
+  FileButton,
   ActionIcon,
   Menu,
   Loader,
@@ -31,6 +31,11 @@ import {
   SlidersHorizontal,
   PanelRightClose,
   PanelRightOpen,
+  StickyNote,
+  ListTodo,
+  CheckCheck,
+  Send,
+  X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -45,6 +50,7 @@ import {
   MessageActions,
   LinkedText,
   TranslationPreferences,
+  languageName,
 } from "./MessageTools";
 import { ConversationTasks, createTask, openTask } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
@@ -122,6 +128,7 @@ export function Inbox({ user }: { user: User }) {
   const list = useRef<HTMLDivElement>(null);
   const listAnchor = useRef<{ id: string; top: number } | null>(null);
   const initialScroll = useRef<string | null>(null);
+  const stickToBottom = useRef(true);
   const loadingOlder = useRef(false);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -165,7 +172,9 @@ export function Inbox({ user }: { user: User }) {
   const [newOpen, setNewOpen] = useState(false);
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
-  const [country, setCountry] = useState("RU");
+  const [country, setCountry] = useState(
+    () => localStorage.getItem(`crm-dialog-country:${user.id}`) || "RU",
+  );
   const [channel, setChannel] = useState<string | null>(null);
   const [firstText, setFirstText] = useState("");
   const [newId, setNewId] = useState<string>(() => crypto.randomUUID());
@@ -335,6 +344,10 @@ export function Inbox({ user }: { user: User }) {
         )
         .catch(() => {});
   }, [selected, current.data?.task_updated, query]);
+  useLayoutEffect(() => {
+    if (stickToBottom.current && pane.current)
+      pane.current.scrollTop = pane.current.scrollHeight;
+  }, [message, file, quoted, note]);
   const lastId = messages.data?.at(-1)?.id;
   useEffect(() => {
     const element = pane.current;
@@ -362,6 +375,7 @@ export function Inbox({ user }: { user: User }) {
         ? drafts.current[id] || loadDraft(user.id, id)
         : undefined;
       initialScroll.current = null;
+      stickToBottom.current = true;
       setSelected(id);
       setOlder([]);
       setHasOlder(true);
@@ -383,6 +397,14 @@ export function Inbox({ user }: { user: User }) {
     window.addEventListener("crm:conversation", show);
     return () => window.removeEventListener("crm:conversation", show);
   }, [choose]);
+  function attachFile(value: File | null) {
+    if (value && value.size > 10 * 1024 * 1024) {
+      setError(t("fileLimit"));
+      return;
+    }
+    setFile(value);
+    setAttachment(null);
+  }
   async function send() {
     if (!selected || busy) return;
     setBusy(true);
@@ -527,8 +549,7 @@ export function Inbox({ user }: { user: User }) {
   const displayName = c?.display_name || c?.name || c?.phone;
   const customerCard = (
     <div className="crm-customer-content">
-      {c?.customer_id && <CustomerSidebar id={c.customer_id} />}
-      {c && <ConversationTasks conversation={c} />}
+      {c?.customer_id && <CustomerSidebar id={c.customer_id} compact />}
       <h3>{t("customer")}</h3>
       <TextInput
         label={t("chatName")}
@@ -651,19 +672,22 @@ export function Inbox({ user }: { user: User }) {
           >
             {t("linkOrder")}
           </Button>
-          <Button
-            mt="xl"
-            fullWidth
-            variant="default"
-            onClick={() =>
-              void change({
-                state: c?.state === "closed" ? "waiting_us" : "closed",
-              })
-            }
-          >
-            {t(c?.state === "closed" ? "reopen" : "close")}
-          </Button>
         </>
+      )}
+      {c && <ConversationTasks conversation={c} />}
+      {canWrite && (
+        <Button
+          mt="sm"
+          fullWidth
+          variant="default"
+          onClick={() =>
+            void change({
+              state: c?.state === "closed" ? "waiting_us" : "closed",
+            })
+          }
+        >
+          {t(c?.state === "closed" ? "reopen" : "close")}
+        </Button>
       )}
     </div>
   );
@@ -818,7 +842,23 @@ export function Inbox({ user }: { user: User }) {
         </div>
       ) : (
         <>
-          <section className="crm-thread">
+          <section
+            className="crm-thread"
+            onDragOver={(event) => {
+              if (
+                canWrite &&
+                !busy &&
+                event.dataTransfer.types.includes("Files")
+              )
+                event.preventDefault();
+            }}
+            onDrop={(event) => {
+              if (canWrite && !busy && event.dataTransfer.files.length) {
+                event.preventDefault();
+                attachFile(event.dataTransfer.files[0]);
+              }
+            }}
+          >
             <header className="crm-thread-header">
               <Button
                 className="crm-back"
@@ -889,6 +929,9 @@ export function Inbox({ user }: { user: User }) {
               className="crm-messages"
               ref={pane}
               onScroll={(e) => {
+                const el = e.currentTarget;
+                stickToBottom.current =
+                  el.scrollHeight - el.scrollTop - el.clientHeight < 80;
                 if (
                   e.currentTarget.scrollTop < 100 &&
                   initialScroll.current === selected &&
@@ -1111,13 +1154,24 @@ export function Inbox({ user }: { user: User }) {
               ))}
               <div ref={end} />
             </div>
-            <DraftPanel
-              key={selected}
-              conversationId={selected}
-              canWrite={canWrite}
-            />
+            <div className="crm-assistant-row">
+              <DraftPanel
+                key={selected}
+                conversationId={selected}
+                canWrite={canWrite}
+                isAdmin={user.role === "admin"}
+              />
+              {canWrite && c && (
+                <QuickReplyPicker
+                  key={c.id}
+                  conversation={c}
+                  text={message}
+                  onInsert={setMessage}
+                />
+              )}
+            </div>
             {canWrite ? (
-              <div className="crm-composer">
+              <div className={"crm-composer " + (note ? "is-note" : "")}>
                 {quoted && (
                   <div className="crm-quote-preview">
                     <span>{quoted.text.slice(0, 150) || t("attachment")}</span>
@@ -1129,70 +1183,99 @@ export function Inbox({ user }: { user: User }) {
                     </button>
                   </div>
                 )}
-                {c && (
-                  <QuickReplyPicker
-                    key={c.id}
-                    conversation={c}
-                    text={message}
-                    onInsert={setMessage}
-                  />
+                {file && (
+                  <div className="crm-file-preview">
+                    <Paperclip size={12} />
+                    <span>{file.name}</span>
+                    <ActionIcon
+                      size={18}
+                      variant="subtle"
+                      aria-label="Убрать файл"
+                      disabled={busy}
+                      onClick={() => attachFile(null)}
+                    >
+                      <X size={13} />
+                    </ActionIcon>
+                  </div>
                 )}
-                <Textarea
-                  aria-label={t("message")}
-                  placeholder={note ? t("noteHint") : t("messageHint")}
-                  value={message}
-                  onChange={(e) => setMessage(e.currentTarget.value)}
-                  autosize
-                  minRows={2}
-                  maxRows={6}
-                  maxLength={10000}
-                  dir="auto"
-                  disabled={busy}
-                  onKeyDown={(e) => {
-                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                      e.preventDefault();
-                      void send();
-                    }
-                  }}
-                />
-                <div className="crm-compose-actions">
-                  <FileInput
-                    aria-label={t("attach")}
-                    placeholder={t("attach")}
-                    value={file}
-                    onChange={(value) => {
-                      if (value && value.size > 10 * 1024 * 1024) {
-                        setError(t("fileLimit"));
-                        return;
-                      }
-                      setFile(value);
-                      setAttachment(null);
-                    }}
-                    clearable
+                <div className="crm-editor">
+                  <Textarea
+                    aria-label={t("message")}
+                    placeholder={note ? t("noteHint") : t("messageHint")}
+                    value={message}
+                    onChange={(event) => setMessage(event.currentTarget.value)}
+                    autosize
+                    minRows={1}
+                    maxRows={7}
+                    maxLength={10000}
+                    dir="auto"
                     disabled={busy}
-                    size="xs"
+                    onPaste={(event) => {
+                      const image = Array.from(event.clipboardData.items)
+                        .find(
+                          (item) =>
+                            item.kind === "file" &&
+                            item.type.startsWith("image/"),
+                        )
+                        ?.getAsFile();
+                      if (image) {
+                        event.preventDefault();
+                        attachFile(image);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        (event.ctrlKey || event.metaKey) &&
+                        event.key === "Enter"
+                      ) {
+                        event.preventDefault();
+                        void send();
+                      }
+                    }}
                   />
+                  <FileButton onChange={attachFile}>
+                    {(props) => (
+                      <ActionIcon
+                        {...props}
+                        className="crm-attach-button"
+                        variant="subtle"
+                        disabled={busy}
+                        title={t("composeHint")}
+                        aria-label={t("attach")}
+                      >
+                        <Paperclip size={18} />
+                      </ActionIcon>
+                    )}
+                  </FileButton>
+                </div>
+                <div className="crm-compose-actions">
                   <Checkbox
                     size="xs"
-                    label={t("privateNote")}
+                    title={t("privateNote")}
+                    aria-label={t("privateNote")}
+                    label={
+                      <>
+                        <StickyNote size={15} />
+                        <span className="crm-action-label">
+                          {t("privateNote")}
+                        </span>
+                      </>
+                    }
                     checked={note}
-                    onChange={(e) => setNote(e.currentTarget.checked)}
+                    onChange={(event) => setNote(event.currentTarget.checked)}
                     disabled={busy}
                   />
-                  <Button
-                    loading={busy}
-                    disabled={!message.trim() && !file}
-                    onClick={() => void send()}
-                  >
-                    {note ? t("saveNote") : t("send")}
-                  </Button>
-                </div>
-                <div className="crm-compose-followup">
                   {c && c.inbound_seq > 0 && (
                     <Button
                       size="xs"
-                      variant="light"
+                      variant="subtle"
                       color={c.unread_count ? "teal" : "orange"}
+                      title={
+                        c.unread_count ? "Не требует ответа" : "Требует ответа"
+                      }
+                      aria-label={
+                        c.unread_count ? "Не требует ответа" : "Требует ответа"
+                      }
                       disabled={busy}
                       onClick={() =>
                         void api(
@@ -1210,20 +1293,49 @@ export function Inbox({ user }: { user: User }) {
                           })
                       }
                     >
-                      {c.unread_count ? "Не требует ответа" : "Требует ответа"}
+                      <CheckCheck size={15} />
+                      <span className="crm-action-label">
+                        {c.unread_count
+                          ? "Не требует ответа"
+                          : "Требует ответа"}
+                      </span>
                     </Button>
                   )}
                   {c && (
                     <Button
                       size="xs"
-                      variant="default"
+                      variant="subtle"
+                      title="Создать задачу"
+                      aria-label="Создать задачу"
                       onClick={() => createTask(c)}
                     >
-                      Создать задачу
+                      <ListTodo size={15} />
+                      <span className="crm-action-label">Создать задачу</span>
                     </Button>
                   )}
+                  <Button
+                    className="crm-send"
+                    size="xs"
+                    loading={busy}
+                    title={t("composeHint")}
+                    disabled={!message.trim() && !file}
+                    onClick={() => void send()}
+                  >
+                    <Send size={14} />
+                    <span>
+                      {note ? t("saveNote") : t("send")}
+                      {!note &&
+                      c?.translation?.translate_outgoing &&
+                      c.translation.translation_client_language !==
+                        c.translation.translation_manager_language
+                        ? " · " +
+                          languageName(
+                            c.translation.translation_client_language,
+                          )
+                        : ""}
+                    </span>
+                  </Button>
                 </div>
-                <small className="crm-compose-hint">{t("composeHint")}</small>
               </div>
             ) : (
               <p className="crm-empty">{t("readOnly")}</p>
@@ -1265,20 +1377,29 @@ export function Inbox({ user }: { user: User }) {
           onChange={(e) => setPhone(e.currentTarget.value)}
           required
         />
-        <Select
-          mt="sm"
-          label={t("country")}
-          value={country}
-          onChange={(v) => setCountry(v || "RU")}
-          data={[
-            { value: "RU", label: "Россия +7" },
-            { value: "KR", label: "대한민국 +82" },
-            { value: "US", label: "United States +1" },
-            { value: "GB", label: "United Kingdom +44" },
-            { value: "AE", label: "الإمارات +971" },
-          ]}
-        />
-        <small className="crm-muted">{t("countryHint")}</small>
+        {!phone.trim().startsWith("+") && (
+          <>
+            {" "}
+            <Select
+              mt="sm"
+              label={t("country")}
+              value={country}
+              onChange={(value) => {
+                const next = value || "RU";
+                setCountry(next);
+                localStorage.setItem(`crm-dialog-country:${user.id}`, next);
+              }}
+              data={[
+                { value: "RU", label: "Россия +7" },
+                { value: "KR", label: "대한민국 +82" },
+                { value: "US", label: "United States +1" },
+                { value: "GB", label: "United Kingdom +44" },
+                { value: "AE", label: "الإمارات +971" },
+              ]}
+            />
+            <small className="crm-muted">{t("countryHint")}</small>
+          </>
+        )}
         <TextInput
           mt="sm"
           label={t("name")}
