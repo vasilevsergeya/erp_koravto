@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Text, cast, func, or_, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.auth import current_user
 from app.api.inbox import writer
@@ -573,10 +574,14 @@ def detach_identity(
 
 @router.post("/customers/{customer_id}/onec/refresh")
 async def refresh_onec(customer_id: str, user=Depends(writer), db: Session = Depends(get_db)):
+    conversation_ids = await run_in_threadpool(onec_refresh_targets, db, customer_id)
+    for conversation_id in conversation_ids:
+        await refresh_customer(conversation_id, force=True)
+    return await run_in_threadpool(get_customer, customer_id, user, db)
+
+
+def onec_refresh_targets(db: Session, customer_id: str):
     c = customer_row(db, customer_id)
     by_phone = {chat.phone: chat.id for chat in related(db, c)}
     db.rollback()  # No database transaction remains open during external requests.
-    for conversation_id in list(by_phone.values())[:20]:
-        await refresh_customer(conversation_id, force=True)
-    db.expire_all()
-    return get_customer(customer_id, user, db)
+    return list(by_phone.values())[:20]

@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from redis.asyncio import Redis
 from sqlalchemy import text
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from app.api import (
@@ -195,7 +196,9 @@ def websocket_authorized(raw: str) -> bool:
 @app.websocket("/api/ws")
 async def websocket_updates(websocket: WebSocket):
     raw = websocket.cookies.get(auth.COOKIE, "")
-    if websocket.headers.get("origin") != config().public_url or not websocket_authorized(raw):
+    if websocket.headers.get("origin") != config().public_url or not await run_in_threadpool(
+        websocket_authorized, raw
+    ):
         await websocket.close(code=1008)
         return
     await websocket.accept()
@@ -206,7 +209,9 @@ async def websocket_updates(websocket: WebSocket):
             last_check = 0.0
             while True:
                 if time.monotonic() - last_check > 20:
-                    if not websocket_authorized(raw):
+                    # DB checkout can wait for HTTP requests to release their connections.
+                    # Keep the event loop free so those requests can finish and clean up.
+                    if not await run_in_threadpool(websocket_authorized, raw):
                         await websocket.close(code=1008)
                         return
                     await websocket.send_json({"type": "ping"})
