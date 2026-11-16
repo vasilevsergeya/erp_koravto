@@ -527,3 +527,171 @@
     flex-wrap: wrap;
   }
 }
+.crm-send-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.crm-compose-actions > .crm-send-group {
+  margin-left: auto;
+}
+.crm-send-group > .mantine-Button-root {
+  border-radius: 4px 0 0 4px;
+  min-width: 0;
+}
+.crm-send-group > .mantine-ActionIcon-root {
+  height: 30px;
+  width: 24px;
+  min-width: 24px;
+  border-radius: 0 4px 4px 0;
+}
+.crm-manager-version {
+  font-size: 11px;
+  color: #758078;
+  white-space: pre-wrap;
+  line-height: 15px;
+  margin-top: 3px;
+}
+.ai-client-version {
+  color: #6b7973;
+  font-size: 12px;
+  margin: 6px 0 10px;
+}
+.ai-client-version button {
+  border: 0;
+  background: none;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.ai-client-version p {
+  white-space: pre-wrap;
+  margin: 4px 0;
+}
+.ai-client-version .is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ai-draft-panel .ai-actions {
+  gap: 3px;
+  flex-wrap: nowrap;
+}
+.ai-draft-panel .ai-actions > .mantine-Button-root {
+  padding: 0 4px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.ai-draft-panel .ai-actions .mantine-Button-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-draft-panel .ai-actions > .crm-send-group {
+  max-width: 50%;
+  flex-shrink: 1;
+}
+
+/* Compact editable customer fields and optional 56px navigation. */
+.crm-detail-row,
+.crm-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 12px;
+}
+.crm-detail-row > span {
+  color: #778491;
+  flex-shrink: 0;
+}
+.crm-detail-row > b,
+.crm-inline-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.crm-inline-value {
+  border: 0;
+  background: none;
+  color: #087f76;
+  text-align: right;
+  cursor: pointer;
+  padding: 3px;
+}
+.crm-inline-value:disabled {
+  color: inherit;
+  cursor: default;
+}
+.crm-customer-content > section {
+  margin: 8px 0;
+}
+.crm-customer-content .crm-onec p {
+  font-size: 12px;
+  margin: 4px 0;
+}
+.crm-onec-candidates {
+  font-size: 12px;
+  margin: 5px 0;
+  color: #976119;
+}
+.crm-onec-candidates summary {
+  cursor: pointer;
+}
+.crm-customer-content .conversation-tasks {
+  padding-top: 6px;
+}
+.nav-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  background: none;
+  border: 0;
+  color: #9aaebf;
+  padding: 6px;
+  cursor: pointer;
+  margin-top: -28px;
+  margin-bottom: 12px;
+}
+@media (min-width: 761px) {
+  .navigation-collapsed .sidebar {
+    width: 56px;
+    padding: 20px 5px;
+  }
+  .navigation-collapsed .main {
+    margin-left: 56px;
+    width: calc(100% - 56px);
+  }
+  .navigation-collapsed .brand,
+  .navigation-collapsed .nav-label,
+  .navigation-collapsed .nav-text,
+  .navigation-collapsed .user-meta,
+  .navigation-collapsed .user-avatar {
+    display: none;
+  }
+  .navigation-collapsed .nav-collapse {
+    align-self: center;
+    margin: 0 0 18px;
+  }
+  .navigation-collapsed nav button {
+    justify-content: center;
+    padding: 12px;
+    gap: 0;
+  }
+  .navigation-collapsed nav button > svg:last-child:not(:first-child) {
+    display: none;
+  }
+  .navigation-collapsed .sidebar-bottom {
+    justify-content: center;
+  }
+}
+@media (max-width: 760px) {
+  .nav-collapse {
+    display: none;
+  }
+}

@@ -41,6 +41,7 @@ from app.services.ai_config import (
     settings,
     working_time,
 )
+from app.services.dialog_languages import manager_language, neutral_greeting
 from app.services.onec_customers import customer_snapshot
 from app.services.outbox import emit
 
@@ -79,8 +80,12 @@ CLASS_SCHEMA: dict = {
 CLASS_SCHEMA["required"] = list(CLASS_SCHEMA["properties"])
 ANSWER_SCHEMA = {
     "type": "object",
-    "properties": {"text": {"type": "string"}, "language": {"type": "string"}},
-    "required": ["text", "language"],
+    "properties": {
+        "text": {"type": "string"},
+        "language": {"type": "string"},
+        "greeting_name": {"type": "string"},
+    },
+    "required": ["text", "language", "greeting_name"],
     "additionalProperties": False,
 }
 
@@ -298,7 +303,15 @@ def context_snapshot(db, conversation, cfg):
         "messages": [
             {"role": m.direction, "text": m.body[:2000], "kind": m.kind} for m in reversed(messages)
         ],
+        "manager_language": manager_language(
+            db.get(User, conversation.assignee_id) if conversation.assignee_id else None
+        ),
         "customer": {
+            "reply_language": (
+                customer.translation_client_language
+                if customer and customer.translation_client_language != "auto"
+                else ""
+            ),
             "name": customer.name if customer else conversation.name,
             "language": customer.language if customer else "",
             "segment": customer.segment if customer else "",
@@ -387,6 +400,7 @@ async def generate(adapter, cfg, context, prompt, examples):
             e.get("intent") != classification.intent,
         ),
     )[:5]
+    reply_language = context.get("customer", {}).get("reply_language") or classification.language
     inputs = [
         {
             "role": "user",
@@ -403,7 +417,7 @@ async def generate(adapter, cfg, context, prompt, examples):
         + cfg.style
         + "\n"
         + prompt
-        + "\nUse get_policies and appropriate factual tools before answering. Return text and language."
+        + f"\nWrite the reply in {reply_language}. Use a neutral greeting without a personal name. Never borrow a name from conversation history or examples. Use get_policies and appropriate factual tools before answering. Return text, language, and greeting_name (the literal personal name used in the opening greeting, or an empty string)."
     )
     for _ in range(7):
         output = await adapter.response(
@@ -416,6 +430,13 @@ async def generate(adapter, cfg, context, prompt, examples):
                 answer.get("language"), str
             ):
                 raise AIError("invalid_answer")
+            if answer["language"] != reply_language:
+                raise AIError("invalid_answer_language")
+            answer["text"], answer["greeting_corrected"] = neutral_greeting(
+                answer["text"],
+                context.get("customer", {}).get("name", ""),
+                answer.get("greeting_name", ""),
+            )
             if cfg.signature:
                 answer["text"] = answer["text"].rstrip() + "\n" + cfg.signature
             return classification, answer, calls
@@ -517,7 +538,25 @@ async def process_draft(ctx, draft_id):
         classified, answer, calls = await asyncio.wait_for(
             generate(adapter, cfg, context, prompt_body, examples), 20
         )
-        policy = policy_check(cfg, classified, answer, calls)
+        policy = policy_check(
+            cfg, classified.model_copy(update={"language": answer["language"]}), answer, calls
+        )
+        if answer.get("greeting_corrected"):
+            policy["reasons"] = list(dict.fromkeys([*policy["reasons"], "greeting_name_mismatch"]))
+            policy["passed"] = False
+        reading_language = context.get("manager_language", "en")
+        from app.services.translations import translate_text
+
+        try:
+            reading_text = await translate_text(
+                answer["text"], answer["language"], reading_language
+            )
+        except AIError:
+            reading_text = ""
+            policy["reasons"] = list(
+                dict.fromkeys([*policy["reasons"], "manager_translation_failed"])
+            )
+            policy["passed"] = False
         with SessionLocal() as db:
             # All workflow writers lock conversation before draft; no await inside this transaction.
             conversation = db.scalar(
@@ -536,10 +575,12 @@ async def process_draft(ctx, draft_id):
             live = settings(db)
             row.intent, row.language, row.entities = (
                 classified.intent,
-                classified.language,
+                answer["language"],
                 classified.model_dump(),
             )
             row.body, row.tool_calls, row.policy = answer["text"][:10000], calls, policy
+            row.manager_language = reading_language
+            row.manager_versions = {reading_language: reading_text} if reading_text else {}
             row.state = "ready"
             row.updated_at = now()
             row.lease_until = None
@@ -550,7 +591,7 @@ async def process_draft(ctx, draft_id):
             customer = (
                 db.get(Customer, conversation.customer_id) if conversation.customer_id else None
             )
-            if customer and not customer.language:
+            if customer and customer.language != classified.language:
                 customer.language = classified.language
                 customer.version += 1
                 customer.updated_at = now()
@@ -717,15 +758,17 @@ def queue_auto():
                 external_id="local:" + mid,
                 direction="out",
                 author_type="ai",
-                body=draft.body,
+                body=draft.manager_versions.get(draft.manager_language) or draft.body,
+                delivery_body=draft.body,
+                delivery_source_language=draft.manager_language
+                if draft.manager_versions.get(draft.manager_language)
+                else draft.language,
+                delivery_target_language=draft.language,
                 kind="text",
                 status="queued",
                 next_attempt_at=now(),
                 reply_through_seq=c.inbound_seq,
             )
-            from app.services.translations import prepare_outgoing
-
-            prepare_outgoing(db, c, msg)
             db.add(msg)
             db.flush()
             draft.message_id = mid

@@ -7,6 +7,7 @@ import {
   Checkbox,
   Loader,
   NumberInput,
+  Popover,
   Select,
   Table,
   TagsInput,
@@ -17,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import "./v1-i18n";
 import { api } from "./api";
 import "./ai.css";
+import { SendLanguageMenu, languageName } from "./MessageTools";
 
 const fail = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const intents: Record<string, string> = {
@@ -62,6 +64,8 @@ const reasons: Record<string, string> = {
   message_changed: "Входящее изменилось",
   timeout: "Превышено время ожидания",
   interrupted: "Задание прервано",
+  greeting_name_mismatch: "Обращение по чужому имени убрано; проверьте ответ",
+  manager_translation_failed: "Перевод для менеджера недоступен",
   generation_failed: "Не удалось подготовить ответ",
   policy_or_message_changed: "Условия отправки изменились",
 };
@@ -73,6 +77,8 @@ type Draft = {
   language: string;
   body: string;
   final_text: string;
+  manager_text: string | null;
+  manager_language: string;
   reason: string;
   policy: { passed?: boolean; reasons?: string[] };
   auto_at: string | null;
@@ -126,10 +132,21 @@ export function DraftPanel({
   conversationId,
   canWrite,
   isAdmin = false,
+  managerLanguage,
+  clientLanguage,
+  onEdit,
 }: {
   conversationId: string;
   canWrite: boolean;
   isAdmin?: boolean;
+  managerLanguage: string;
+  clientLanguage?: string;
+  onEdit: (
+    id: string,
+    text: string,
+    source: string,
+    target: string | null,
+  ) => void;
 }) {
   const { t } = useTranslation("v1");
   const query = useQueryClient();
@@ -141,14 +158,14 @@ export function DraftPanel({
       ),
     refetchInterval: 4000,
   });
-  const [editing, setEditing] = useState<string | null>(null),
-    [answer, setAnswer] = useState(""),
-    [reason, setReason] = useState(""),
-    [category, setCategory] = useState<string | null>(null),
-    [rejecting, setRejecting] = useState(false),
+  const [opened, setOpened] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  const [opened, setOpened] = useState(false);
+  const [rejecting, setRejecting] = useState(false),
+    [category, setCategory] = useState<string | null>(null),
+    [reason, setReason] = useState("");
+  const [sendLanguage, setSendLanguage] = useState<string | null>(null),
+    [clientExpanded, setClientExpanded] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const outside = (event: PointerEvent) => {
@@ -158,48 +175,58 @@ export function DraftPanel({
       )
         setOpened(false);
     };
-    document.addEventListener("pointerdown", outside);
-    return () => document.removeEventListener("pointerdown", outside);
-  }, []);
-  useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.altKey && event.code === "KeyA") {
         event.preventDefault();
         setOpened((value) => !value);
       } else if (event.key === "Escape") setOpened(false);
     };
+    document.addEventListener("pointerdown", outside);
     window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      window.removeEventListener("keydown", key);
+    };
   }, []);
-  const d = data.data?.item;
-  const pending = d?.decision === "pending";
-  const warningLabels = [
-    ...new Set(
-      [...(d?.policy.reasons || []), d?.reason || ""]
-        .filter(Boolean)
-        .map((reason) => reasons[reason] || reason),
-    ),
-  ];
-  const draftState = data.isLoading
+  const d = data.data?.item,
+    pending = d?.decision === "pending";
+  const readable = !!d?.manager_text && d.manager_language === managerLanguage;
+  const target =
+    sendLanguage === "original"
+      ? managerLanguage
+      : sendLanguage || clientLanguage || d?.language || "";
+  const state = data.isLoading
     ? "Готовится…"
     : !pending
       ? "Черновика нет"
       : states[d.state] || d.state;
+  const warnings = [
+    ...new Set(
+      [...(d?.policy.reasons || []), d?.reason || ""]
+        .filter(Boolean)
+        .map((value) => reasons[value] || value),
+    ),
+  ];
   async function act(path: string, body?: unknown) {
     setBusy(true);
     setError("");
     try {
       await api(path, "POST", body);
       refresh(query);
-      if (/\/(send|send-edited|reject)$/.test(path)) setOpened(false);
+      if (/\/(send|send-edited|reject)$/.test(path)) {
+        setOpened(false);
+        setSendLanguage(null);
+      }
       return true;
-    } catch (e) {
-      setError(fail(e));
+    } catch (error) {
+      setError(fail(error));
       return false;
     } finally {
       setBusy(false);
     }
   }
+  const regenerate = () =>
+    void act("/api/conversations/" + conversationId + "/draft/regenerate");
   return (
     <section
       ref={panelRef}
@@ -216,10 +243,14 @@ export function DraftPanel({
       >
         <b>AI-помощник</b>
         <span className={"ai-line-state " + (pending ? d.state : "empty")}>
-          {draftState}
+          {state}
         </span>
         <span className="ai-line-preview" dir="auto">
-          {pending ? d.body : ""}
+          {pending
+            ? readable
+              ? d.manager_text
+              : "Перевод для менеджера готовится…"
+            : ""}
         </span>
         {!pending && canWrite && data.data?.configured && data.data.enabled && (
           <span className="ai-prepare-hint">Подготовить</span>
@@ -234,46 +265,189 @@ export function DraftPanel({
         >
           <div className="ai-heading">
             <b>AI-помощник</b>
-            <Badge variant="light">
-              {d
-                ? states[d.state] || d.state
-                : data.data?.configured
-                  ? "Нет черновика"
-                  : "Ключ OpenAI не настроен"}
-            </Badge>
+            <Badge variant="light">{state}</Badge>
             {d && (
               <small>
-                {intents[d.intent]} · {d.language} · {decisions[d.decision]}
+                {intents[d.intent]} · {languageName(d.language || "en")}
               </small>
             )}
           </div>
           {(error || data.error) && (
             <Alert color="red">{error || fail(data.error)}</Alert>
           )}
-          {d?.auto_at && d.decision === "pending" && (
+          {d?.auto_at && pending && (
             <Alert color="orange">
-              Автоответ ожидает отправки. Нажмите «Изменить», чтобы остановить
-              его и проверить текст.
+              Автоответ ожидает отправки. «Изменить» останавливает
+              автоматическую отправку.
             </Alert>
           )}
-          {d?.body && (
-            <details open={d.decision === "pending"}>
-              <summary>Текст и проверка</summary>
-              <div className="ai-draft-body" dir="auto">
-                {d.body}
-              </div>
-              {warningLabels.map((label) => (
+          {d?.body && pending && (
+            <>
+              {warnings.map((label) => (
                 <small className="ai-warning" key={label}>
                   {label}
                 </small>
               ))}
-            </details>
+              {readable ? (
+                <div className="ai-draft-body" dir="auto">
+                  {d.manager_text}
+                </div>
+              ) : (
+                <Alert color="orange">
+                  Не удалось получить версию на вашем языке. Черновик не
+                  отправлен.{" "}
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    disabled={busy}
+                    onClick={() =>
+                      void act("/api/drafts/" + d.id + "/reading/retry")
+                    }
+                  >
+                    Повторить перевод
+                  </Button>
+                </Alert>
+              )}
+              {d.language !== managerLanguage && (
+                <div className="ai-client-version">
+                  <button
+                    type="button"
+                    aria-expanded={clientExpanded}
+                    onClick={() => setClientExpanded(!clientExpanded)}
+                  >
+                    Клиенту · {languageName(d.language)}{" "}
+                    {clientExpanded ? "▴" : "▾"}
+                  </button>
+                  <p dir="auto" className={clientExpanded ? "" : "is-clamped"}>
+                    {d.body}
+                  </p>
+                </div>
+              )}
+            </>
           )}
+          {canWrite &&
+            d &&
+            pending &&
+            ["ready", "escalated"].includes(d.state) && (
+              <div className="ai-actions">
+                <div className="crm-send-group">
+                  <Button
+                    size="xs"
+                    loading={busy}
+                    disabled={!readable || !target}
+                    title={"Отправить · " + languageName(target || "en")}
+                    onClick={() =>
+                      void act("/api/drafts/" + d.id + "/send", {
+                        source_language: managerLanguage,
+                        target_language: sendLanguage || target,
+                      })
+                    }
+                  >
+                    Отправить · {languageName(target || "en")}
+                  </Button>
+                  <SendLanguageMenu
+                    value={sendLanguage}
+                    onChange={setSendLanguage}
+                    managerLanguage={managerLanguage}
+                    clientLanguage={clientLanguage || d.language}
+                    disabled={busy}
+                  />
+                </div>
+                <Button
+                  size="xs"
+                  variant="light"
+                  disabled={busy || !readable}
+                  onClick={async () => {
+                    if (await act("/api/drafts/" + d.id + "/pause")) {
+                      onEdit(
+                        d.id,
+                        d.manager_text!,
+                        d.manager_language,
+                        sendLanguage,
+                      );
+                      setOpened(false);
+                    }
+                  }}
+                >
+                  Изменить
+                </Button>
+                <Popover
+                  opened={rejecting}
+                  onChange={setRejecting}
+                  withinPortal={false}
+                  position="top"
+                  width={260}
+                >
+                  <Popover.Target>
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      color="gray"
+                      disabled={busy}
+                      onClick={async () => {
+                        if (await act("/api/drafts/" + d.id + "/pause"))
+                          setRejecting(!rejecting);
+                      }}
+                    >
+                      Отклонить
+                    </Button>
+                  </Popover.Target>
+                  <Popover.Dropdown>
+                    <Select
+                      comboboxProps={{ withinPortal: false }}
+                      label={t("rejectReason")}
+                      value={category}
+                      onChange={setCategory}
+                      data={["incorrect", "irrelevant", "tone", "other"].map(
+                        (value) => ({ value, label: t(value) }),
+                      )}
+                    />
+                    <TextInput
+                      mt="xs"
+                      label={t("comment")}
+                      value={reason}
+                      onChange={(event) => setReason(event.currentTarget.value)}
+                      maxLength={1000}
+                    />
+                    <Button
+                      mt="xs"
+                      size="xs"
+                      loading={busy}
+                      disabled={
+                        !category || (category === "other" && !reason.trim())
+                      }
+                      onClick={async () => {
+                        if (
+                          await act("/api/drafts/" + d.id + "/reject", {
+                            category,
+                            reason,
+                          })
+                        ) {
+                          setRejecting(false);
+                          setReason("");
+                        }
+                      }}
+                    >
+                      Отклонить
+                    </Button>
+                  </Popover.Dropdown>
+                </Popover>
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  title="Подготовить заново"
+                  disabled={busy}
+                  onClick={regenerate}
+                >
+                  Заново
+                </Button>
+              </div>
+            )}
           {!!d?.tool_calls.length && (
             <details>
               <summary>{t("sources")}</summary>
-              {d.tool_calls.map((call, i) => (
-                <div key={i}>
+              {d.tool_calls.map((call, index) => (
+                <div key={index}>
                   <p>{sourceSummary(call.name, call.result)}</p>
                   {isAdmin && (
                     <details>
@@ -294,135 +468,20 @@ export function DraftPanel({
             </details>
           )}
           {canWrite &&
-            d &&
-            d.decision === "pending" &&
-            ["ready", "escalated"].includes(d.state) && (
-              <>
-                <div className="ai-actions">
-                  <Button
-                    size="xs"
-                    loading={busy}
-                    onClick={() =>
-                      void act("/api/drafts/" + d.id + "/send", {})
-                    }
-                  >
-                    Отправить как есть
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="light"
-                    disabled={busy}
-                    onClick={async () => {
-                      if (await act("/api/drafts/" + d.id + "/pause")) {
-                        setEditing(d.id);
-                        setAnswer(d.body);
-                      }
-                    }}
-                  >
-                    Изменить
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="subtle"
-                    color="gray"
-                    onClick={async () => {
-                      if (await act("/api/drafts/" + d.id + "/pause"))
-                        setRejecting(true);
-                    }}
-                  >
-                    Отклонить
-                  </Button>
-                </div>
-                {editing === d.id && (
-                  <div className="ai-edit">
-                    <Textarea
-                      label="Правка AI-ответа"
-                      value={answer}
-                      onChange={(e) => setAnswer(e.currentTarget.value)}
-                      autosize
-                      minRows={3}
-                      maxRows={8}
-                      maxLength={10000}
-                    />
-                    <Button
-                      size="xs"
-                      loading={busy}
-                      onClick={async () => {
-                        if (
-                          await act("/api/drafts/" + d.id + "/send-edited", {
-                            final_text: answer,
-                          })
-                        )
-                          setEditing(null);
-                      }}
-                    >
-                      Отправить с правкой
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      onClick={() => setEditing(null)}
-                    >
-                      Закрыть
-                    </Button>
-                  </div>
-                )}
-                {rejecting && (
-                  <div className="ai-edit">
-                    <Select
-                      comboboxProps={{ withinPortal: false }}
-                      label={t("rejectReason")}
-                      value={category}
-                      onChange={setCategory}
-                      data={["incorrect", "irrelevant", "tone", "other"].map(
-                        (value) => ({ value, label: t(value) }),
-                      )}
-                    />
-                    <TextInput
-                      label={t("comment")}
-                      value={reason}
-                      onChange={(e) => setReason(e.currentTarget.value)}
-                    />
-                    <Button
-                      size="xs"
-                      disabled={
-                        !category || (category === "other" && !reason.trim())
-                      }
-                      loading={busy}
-                      onClick={async () => {
-                        if (
-                          await act("/api/drafts/" + d.id + "/reject", {
-                            reason,
-                            category,
-                          })
-                        ) {
-                          setRejecting(false);
-                          setReason("");
-                        }
-                      }}
-                    >
-                      Подтвердить отклонение
-                    </Button>
-                  </div>
-                )}
-              </>
+            data.data?.configured &&
+            data.data.enabled &&
+            (!pending || !d?.body) && (
+              <Button
+                size="xs"
+                variant="subtle"
+                disabled={
+                  busy || d?.state === "generating" || d?.state === "queued"
+                }
+                onClick={regenerate}
+              >
+                Подготовить
+              </Button>
             )}
-          {canWrite && data.data?.configured && data.data.enabled && (
-            <Button
-              size="xs"
-              variant="subtle"
-              disabled={
-                busy || d?.state === "generating" || d?.state === "queued"
-              }
-              onClick={() =>
-                void act(
-                  "/api/conversations/" + conversationId + "/draft/regenerate",
-                )
-              }
-            >
-              Подготовить заново
-            </Button>
-          )}
         </div>
       )}
     </section>

@@ -817,7 +817,10 @@ def notifications(
 ):
     rows = db.scalars(
         select(Notification)
-        .where(Notification.user_id == user.id)
+        .where(
+            Notification.user_id == user.id,
+            or_(Notification.kind.like("task.%"), Notification.kind == "ai.escalation"),
+        )
         .order_by(Notification.created_at.desc(), Notification.id)
         .offset(offset)
         .limit(50)
@@ -825,7 +828,11 @@ def notifications(
     unread = db.scalar(
         select(func.count())
         .select_from(Notification)
-        .where(Notification.user_id == user.id, Notification.read_at.is_(None))
+        .where(
+            Notification.user_id == user.id,
+            or_(Notification.kind.like("task.%"), Notification.kind == "ai.escalation"),
+            Notification.read_at.is_(None),
+        )
     )
     return {
         "unread": unread,
@@ -853,6 +860,20 @@ def read_notifications(body: ReadInput, user=Depends(current_user), db: Session 
         .where(
             Notification.user_id == user.id,
             Notification.id.in_(body.ids),
+            Notification.read_at.is_(None),
+        )
+        .values(read_at=now())
+    )
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/notifications/read-all")
+def read_all_notifications(user=Depends(current_user), db: Session = Depends(get_db)):
+    db.execute(
+        update(Notification)
+        .where(
+            Notification.user_id == user.id,
             Notification.read_at.is_(None),
         )
         .values(read_at=now())

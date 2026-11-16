@@ -12,7 +12,7 @@ from sqlalchemy import or_, select, text, update
 
 from app.core.db import SessionLocal
 from app.core.settings import get_setting
-from app.integrations.onec import OneCAdapter, OneCError, phone_digits
+from app.integrations.onec import OneCAdapter, OneCError, exact_phone, phone_country, phone_digits
 from app.models import Conversation, now
 
 log = logging.getLogger("crm")
@@ -39,6 +39,13 @@ def customer_snapshot(c, db):
     phone = lookup_phone(c)
     valid = c.onec_phone == phone and c.onec_config == fingerprint
     clients = c.onec_clients if valid else []
+    verified = [
+        cl
+        for cl in clients
+        if exact_phone(cl.get("matched_phone", "")) == exact_phone(c.phone) and exact_phone(c.phone)
+    ]
+    candidates = [cl for cl in clients if cl not in verified]
+    clients = verified
     checked = c.onec_checked_at if valid else None
     error = c.onec_error if valid else None
     if not all(values):
@@ -50,10 +57,20 @@ def customer_snapshot(c, db):
     elif not checked:
         status = "pending"
     else:
-        status = "matched" if len(clients) == 1 else "multiple" if clients else "not_found"
+        status = (
+            "matched"
+            if len(clients) == 1
+            else "multiple"
+            if clients
+            else "unverified"
+            if candidates
+            else "not_found"
+        )
     return {
         "status": status,
         "clients": clients,
+        "candidates": candidates if all(values) and phone else [],
+        "phone_country": phone_country(c.phone),
         "checked_at": checked,
         "stale": bool(checked and (error or checked < now() - TTL)),
         "error": error,

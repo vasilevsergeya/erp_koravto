@@ -79,6 +79,7 @@ def describe(session, user):
         "id": user.id,
         "email": user.email,
         "role": user.role,
+        "manager_language": user.manager_language,
         "csrf_token": session.csrf_token,
         "must_change_password": user.must_change_password,
         "session_expires_at": session.expires_at,

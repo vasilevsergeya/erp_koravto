@@ -7,7 +7,14 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.api.auth import admin_user, current_user, rate_limit
-from app.api.inbox import MessageInput, describe_message, enqueue, locked_conversation, writer
+from app.api.inbox import (
+    MessageInput,
+    describe_message,
+    enqueue,
+    locked_conversation,
+    translate_before_send,
+    writer,
+)
 from app.core.db import get_db
 from app.core.settings import get_setting, invalidate_settings, put_setting
 from app.integrations.openai import AIError, OpenAIAdapter
@@ -18,6 +25,7 @@ from app.models import (
     ApprovedExample,
     AuditEvent,
     Conversation,
+    Customer,
     Message,
     User,
     now,
@@ -31,13 +39,14 @@ from app.services.ai import (
     supersede,
 )
 from app.services.ai_config import BASE_PROMPT, AIConfig, config_version, settings
+from app.services.dialog_languages import client_language, manager_language
 from app.services.outbox import emit
 
 router = APIRouter(prefix="/api", tags=["ai"])
 
 
-def describe(d):
-    return {
+def describe(d, reading_language=None):
+    result = {
         k: getattr(d, k)
         for k in [
             "id",
@@ -61,6 +70,50 @@ def describe(d):
             "prompt_id",
         ]
     }
+
+    language = reading_language or d.manager_language
+    result.update(
+        manager_language=language,
+        manager_text=d.body if language == d.language else (d.manager_versions or {}).get(language),
+        final_manager_text=d.final_manager_text,
+        final_language=d.final_language,
+    )
+    return result
+
+
+async def reading_version(db, draft_id, language):
+    row = db.scalar(select(AIDraft).where(AIDraft.id == draft_id).with_for_update())
+    if not row or not row.body or row.decision != "pending":
+        return
+    if language == row.language or (row.manager_versions or {}).get(language):
+        return
+    retry_key = "retry_after:" + language
+    if (row.manager_versions or {}).get(retry_key, 0) > now().timestamp():
+        return
+    source, original = row.language or "auto", row.body
+    row.manager_versions = {**(row.manager_versions or {}), retry_key: now().timestamp() + 120}
+    db.commit()
+    from app.services.translations import translate_text
+
+    try:
+        value = await translate_text(original, source, language)
+    except AIError:
+        value = None
+    row = db.scalar(
+        select(AIDraft)
+        .where(AIDraft.id == draft_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if row and row.body == original:
+        versions = dict(row.manager_versions or {})
+        if value:
+            versions[language] = value
+            versions.pop(retry_key, None)
+        else:
+            versions[retry_key] = now().timestamp() + 60
+        row.manager_versions = versions
+        db.commit()
 
 
 @router.get("/ai/settings")
@@ -171,7 +224,7 @@ def activate(prompt_id: str, user=Depends(admin_user), db: Session = Depends(get
 
 
 @router.get("/conversations/{conversation_id}/draft")
-def draft(conversation_id: str, user=Depends(current_user), db: Session = Depends(get_db)):
+async def draft(conversation_id: str, user=Depends(current_user), db: Session = Depends(get_db)):
     if not db.get(Conversation, conversation_id):
         raise HTTPException(404, "Диалог не найден")
     row = db.scalar(
@@ -180,9 +233,11 @@ def draft(conversation_id: str, user=Depends(current_user), db: Session = Depend
         .order_by(AIDraft.created_at.desc(), AIDraft.id.desc())
         .limit(1)
     )
+    if row:
+        await reading_version(db, row.id, manager_language(user))
     cfg = settings(db)
     return {
-        "item": describe(row) if row else None,
+        "item": describe(row, manager_language(user)) if row else None,
         "configured": bool(get_setting(db, "openai.api_key", "")),
         "enabled": cfg.enabled,
     }
@@ -221,64 +276,123 @@ class Decision(BaseModel):
     final_text: str | None = Field(None, min_length=1, max_length=10000)
     reason: str = Field("", max_length=1000)
     category: Literal["", "incorrect", "irrelevant", "tone", "other"] = ""
+    source_language: str | None = Field(None, pattern=r"^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$")
+    target_language: str | None = Field(None, pattern=r"^original$|^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$")
+    attachment_id: str | None = None
+    quoted_message_id: str | None = None
 
 
 @router.post("/drafts/{draft_id}/send")
 @router.post("/drafts/{draft_id}/send-edited")
-def send_draft(draft_id: str, body: Decision, user=Depends(writer), db: Session = Depends(get_db)):
+async def send_draft(
+    draft_id: str, body: Decision, user=Depends(writer), db: Session = Depends(get_db)
+):
+    fingerprint = body.model_dump(exclude={"reason", "category"})
     row = db.get(AIDraft, draft_id)
     if not row:
         raise HTTPException(404, "Черновик не найден")
-    conversation = locked_conversation(db, row.conversation_id)
-    row = db.scalar(
-        select(AIDraft)
-        .where(AIDraft.id == draft_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    assert row is not None
-    final = body.final_text if body.final_text is not None else row.body
     if row.decision in ("sent", "edited"):
-        if row.decided_by != user.id or row.final_text != final:
+        if row.decided_by != user.id or row.decision_input != fingerprint:
             raise HTTPException(409, "Решение уже принято")
-        return describe_message(db.get(Message, row.message_id), db)
+        return describe_message(db.get(Message, row.message_id), db, user.id)
+    conversation = db.get(Conversation, row.conversation_id)
+    if not conversation:
+        raise HTTPException(404, "Диалог не найден")
     if (
         row.decision != "pending"
         or row.state not in ("ready", "escalated")
         or not current(db, row, conversation)
     ):
         raise HTTPException(409, "Черновик устарел. Обновите диалог")
-    if not final.strip():
+    reading_language = body.source_language or manager_language(user)
+    profile = db.get(Customer, conversation.customer_id) if conversation.customer_id else None
+    target = (
+        reading_language
+        if body.target_language == "original"
+        else body.target_language or client_language(profile, row.language)
+    )
+    if not target:
+        raise HTTPException(409, "Выберите язык отправки")
+    original_body, original_language = row.body, row.language
+    cid = row.conversation_id
+    cached_reading = (
+        original_body
+        if reading_language == original_language
+        else (row.manager_versions or {}).get(reading_language)
+    )
+    db.rollback()
+    if body.final_text is None:
+        manager_text = cached_reading or await translate_before_send(
+            original_body, original_language or "auto", reading_language
+        )
+        final = (
+            original_body
+            if target == original_language
+            else await translate_before_send(original_body, original_language or "auto", target)
+        )
+    else:
+        manager_text = body.final_text
+        final = await translate_before_send(manager_text, reading_language, target)
+    if not manager_text.strip():
         raise HTTPException(400, "Введите ответ")
+    conversation = locked_conversation(db, cid)
+    row = db.scalar(
+        select(AIDraft)
+        .where(AIDraft.id == draft_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if row is None:
+        raise HTTPException(409, "Черновик удалён. Текст не отправлен")
+    if (
+        row.decision in ("sent", "edited")
+        and row.decided_by == user.id
+        and row.decision_input == fingerprint
+    ):
+        return describe_message(db.get(Message, row.message_id), db, user.id)
+    if (
+        row.decision != "pending"
+        or row.state not in ("ready", "escalated")
+        or row.body != original_body
+        or not current(db, row, conversation)
+    ):
+        raise HTTPException(409, "Черновик устарел. Текст не отправлен")
     msg = enqueue(
         db,
         conversation,
-        MessageInput(client_id=uuid.uuid5(uuid.UUID(row.id), "approved"), text=final),
+        MessageInput(
+            client_id=uuid.uuid5(uuid.UUID(row.id), "approved"),
+            text=manager_text,
+            source_language=reading_language,
+            target_language=target,
+            attachment_id=body.attachment_id,
+            quoted_message_id=body.quoted_message_id,
+        ),
         user,
+        prepared=(final, reading_language, target),
     )
-    row.decision = "sent" if final == row.body else "edited"
-    row.final_text = final
-    row.decided_by = user.id
-    row.decided_at = now()
-    row.message_id = msg.id
-    row.auto_at = None
-    # Only manager-approved examples, never automatic replies. Index after confirmed delivery.
+    row.decision = "sent" if body.final_text is None else "edited"
+    row.final_text, row.final_manager_text, row.final_language = final, manager_text, target
+    row.decision_input = fingerprint
+    row.decided_by, row.decided_at, row.message_id, row.auto_at = user.id, now(), msg.id, None
     inbound = db.get(Message, row.inbound_id)
     assert inbound is not None
     db.add(
         ApprovedExample(
             draft_id=row.id,
             intent=row.intent,
-            language=row.language,
+            language=target,
             question=inbound.body[:10000],
             reply=final,
+            manager_reply=manager_text,
+            manager_language=reading_language,
         )
     )
     db.add(AuditEvent(user_id=user.id, action="ai.draft." + row.decision, target=row.id))
     db.commit()
     emit("ai.changed", conversations=[conversation.id])
     emit(conversations=[conversation.id])
-    return describe_message(msg, db)
+    return describe_message(msg, db, user.id)
 
 
 @router.post("/drafts/{draft_id}/reject")
@@ -407,3 +521,16 @@ def pause_draft(draft_id: str, user=Depends(writer), db: Session = Depends(get_d
     db.commit()
     emit("ai.changed", conversations=[row.conversation_id])
     return describe(row)
+
+
+@router.post("/drafts/{draft_id}/reading/retry")
+def retry_reading(draft_id: str, user=Depends(current_user), db: Session = Depends(get_db)):
+    rate_limit("draft-reading:" + user.id, 5, 60)
+    row = db.scalar(select(AIDraft).where(AIDraft.id == draft_id).with_for_update())
+    if not row:
+        raise HTTPException(404, "Черновик не найден")
+    versions = dict(row.manager_versions or {})
+    versions.pop("retry_after:" + manager_language(user), None)
+    row.manager_versions = versions
+    db.commit()
+    return {"ok": True}

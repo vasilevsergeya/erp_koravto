@@ -2,6 +2,7 @@ export type User = {
   id: string;
   email: string;
   role: string;
+  manager_language?: string;
   csrf_token: string;
   must_change_password: boolean;
   session_expires_at?: string;
@@ -14,6 +15,8 @@ export type Setting = {
   value: string | number;
 };
 export type TranslationPreferences = {
+  incoming_translation_auto?: boolean;
+  client_language_mode?: string;
   translate_incoming: boolean;
   translate_outgoing: boolean;
   translation_client_language: string;
@@ -52,6 +55,15 @@ export type Message = {
   external: boolean;
   sent_at: string | null;
   delivery_text: string | null;
+  source_language?: string;
+  delivery_language?: string;
+  reading_translation?: {
+    state: string;
+    text: string | null;
+    error: string | null;
+    source: string;
+    target: string;
+  } | null;
   translation?: {
     state: string;
     text: string | null;
@@ -111,7 +123,9 @@ export class ApiError extends Error {
   }
 }
 export class SessionExpiredError extends ApiError {
-  constructor() { super("Сессия завершена. Войдите снова; черновик сохранён.", 401); }
+  constructor() {
+    super("Сессия завершена. Войдите снова; черновик сохранён.", 401);
+  }
 }
 
 function expireSession(): never {
@@ -124,10 +138,14 @@ function expireSession(): never {
 }
 
 async function readResponse(response: Response) {
-  const data = await response.json().catch(() => ({ detail: "Не удалось прочитать ответ сервера" }));
-  if (!response.ok) throw new ApiError(
-    typeof data.detail === "string" ? data.detail : "Ошибка запроса", response.status,
-  );
+  const data = await response
+    .json()
+    .catch(() => ({ detail: "Не удалось прочитать ответ сервера" }));
+  if (!response.ok)
+    throw new ApiError(
+      typeof data.detail === "string" ? data.detail : "Ошибка запроса",
+      response.status,
+    );
   return data;
 }
 
@@ -138,9 +156,12 @@ export async function refreshSession(): Promise<void> {
   const startedAt = revision;
   const startedGeneration = generation;
   refreshing = (async () => {
-    const perform = () => fetch("/api/auth/refresh", {
-      method: "POST", credentials: "same-origin", headers: { "X-CSRF-Token": csrf },
-    });
+    const perform = () =>
+      fetch("/api/auth/refresh", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf },
+      });
     let response = await perform();
     if (generation !== startedGeneration) throw new SessionExpiredError();
     if (response.status === 403) {
@@ -161,23 +182,33 @@ export async function refreshSession(): Promise<void> {
     if (revision !== startedAt || expired) throw new SessionExpiredError();
     csrf = user.csrf_token;
     revision++;
-    window.dispatchEvent(new CustomEvent("crm:session-updated", { detail: user }));
-  })().finally(() => { refreshing = null; });
+    window.dispatchEvent(
+      new CustomEvent("crm:session-updated", { detail: user }),
+    );
+  })().finally(() => {
+    refreshing = null;
+  });
   return refreshing;
 }
 
-async function request(path: string, options: () => RequestInit): Promise<Response> {
-  const protectedRequest = path.startsWith("/api/") && !path.startsWith("/api/auth/");
+async function request(
+  path: string,
+  options: () => RequestInit,
+): Promise<Response> {
+  const protectedRequest =
+    path.startsWith("/api/") && !path.startsWith("/api/auth/");
   if (protectedRequest && expired) throw new SessionExpiredError();
   const startedAt = revision;
   const startedGeneration = generation;
   let response = await fetch(path, options());
-  if (protectedRequest && generation !== startedGeneration) throw new SessionExpiredError();
+  if (protectedRequest && generation !== startedGeneration)
+    throw new SessionExpiredError();
   if (response.status === 401 && protectedRequest) {
     if (expired) throw new SessionExpiredError();
     // Late responses from the same burst reuse the completed refresh as well.
     if (revision === startedAt) await refreshSession();
-    if (expired || generation !== startedGeneration) throw new SessionExpiredError();
+    if (expired || generation !== startedGeneration)
+      throw new SessionExpiredError();
     response = await fetch(path, options());
     if (generation !== startedGeneration) throw new SessionExpiredError();
     if (response.status === 401) return expireSession();

@@ -45,9 +45,12 @@ class Input(BaseModel):
 class Profile(Input):
     name: str = Field("", max_length=200)
     language: str = Field("", max_length=20, pattern=r"^$|^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$")
+    incoming_translation_auto: bool = True
     translate_incoming: bool = False
     translate_outgoing: bool = False
-    translation_client_language: str = Field("en", pattern=r"^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$")
+    translation_client_language: str = Field(
+        "auto", pattern=r"^auto$|^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$"
+    )
     translation_manager_language: str = Field("ru", pattern=r"^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$")
     segment: Literal["", "retail", "small_wholesale", "wholesale"] = ""
     country: str = Field("", pattern=r"^$|^[A-Z]{2}$")
@@ -379,6 +382,8 @@ def edit_customer(
     c = customer_row(db, customer_id, version=body.version)
     values = body.model_dump(exclude_unset=True, exclude={"version"})
     check_owner(db, values.get("default_owner_id"))
+    if "translate_incoming" in values and "incoming_translation_auto" not in values:
+        values["incoming_translation_auto"] = False
     changes = {k: [getattr(c, k), v] for k, v in values.items() if getattr(c, k) != v}
     if "name" in values:
         if c.name_manual != bool(values["name"]):
@@ -585,3 +590,21 @@ def onec_refresh_targets(db: Session, customer_id: str):
     by_phone = {chat.phone: chat.id for chat in related(db, c)}
     db.rollback()  # No database transaction remains open during external requests.
     return list(by_phone.values())[:20]
+
+
+class PersonalLanguage(BaseModel):
+    language: str = Field("en", pattern=r"^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$")
+
+
+@router.get("/me/language")
+def personal_language(user=Depends(current_user)):
+    return {"language": user.manager_language}
+
+
+@router.put("/me/language")
+def save_personal_language(
+    body: PersonalLanguage, user=Depends(current_user), db: Session = Depends(get_db)
+):
+    user.manager_language = body.language
+    db.commit()
+    return {"language": user.manager_language}

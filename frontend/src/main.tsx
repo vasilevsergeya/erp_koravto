@@ -33,6 +33,8 @@ import {
   KeyRound,
   Bell,
   Sparkles,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import "@mantine/core/styles.css";
 import "./i18n";
@@ -738,6 +740,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       window.removeEventListener("popstate", pop);
     };
   }, []);
+  const [navCollapsed, setNavCollapsed] = useState(
+    () => localStorage.getItem(`crm-navigation:${user.id}`) === "collapsed",
+  );
   const pages = [
     { id: "inbox", icon: MessageSquare },
     { id: "boards", icon: LayoutDashboard },
@@ -755,14 +760,41 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       : []),
   ];
   return (
-    <div className={"workspace " + (page === "inbox" ? "workspace-inbox" : "")}>
+    <div
+      className={
+        "workspace " +
+        (page === "inbox" ? "workspace-inbox " : "") +
+        (navCollapsed ? "navigation-collapsed" : "")
+      }
+    >
       <aside className="sidebar">
         <Brand />
+        <button
+          className="nav-collapse"
+          title={navCollapsed ? "Развернуть меню" : "Свернуть меню"}
+          aria-label={navCollapsed ? "Развернуть меню" : "Свернуть меню"}
+          onClick={() => {
+            const next = !navCollapsed;
+            setNavCollapsed(next);
+            localStorage.setItem(
+              `crm-navigation:${user.id}`,
+              next ? "collapsed" : "expanded",
+            );
+          }}
+        >
+          {navCollapsed ? (
+            <PanelLeftOpen size={18} />
+          ) : (
+            <PanelLeftClose size={18} />
+          )}
+        </button>
         <div className="nav-label">{t("workspace")}</div>
         <nav>
           {pages.map((p) => (
             <button
               key={p.id}
+              title={t(p.id)}
+              aria-label={t(p.id)}
               className={page === p.id ? "active" : ""}
               onClick={() => {
                 history.pushState(
@@ -774,7 +806,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               }}
             >
               <p.icon size={19} />
-              {t(p.id)}
+              <span className="nav-text">{t(p.id)}</span>
               {page === p.id && <ChevronRight size={16} />}
             </button>
           ))}

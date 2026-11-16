@@ -346,6 +346,7 @@ class DialogWorkflowTests(unittest.TestCase):
         self.assertEqual(next(r for r in rows if r["id"] == ids[0])["last_message"], "Visible")
 
     def test_translation_preserves_original_blocks_delivery_and_caches_history(self):
+        self.client.put("/api/me/language", json={"language": "ru"})
         profile = self.client.get("/api/customers/" + self.customer).json()
         changed = self.client.patch(
             "/api/customers/" + self.customer,

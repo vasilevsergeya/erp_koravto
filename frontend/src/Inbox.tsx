@@ -1,5 +1,6 @@
 import {
   Fragment,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -21,6 +22,7 @@ import {
   Menu,
   Loader,
   Modal,
+  Popover,
   Select,
   Textarea,
   TextInput,
@@ -51,6 +53,7 @@ import {
   LinkedText,
   TranslationPreferences,
   languageName,
+  SendLanguageMenu,
 } from "./MessageTools";
 import { ConversationTasks, createTask, openTask } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
@@ -70,9 +73,44 @@ type Member = { id: string; name: string; role: string };
 type OneCCustomer = {
   status: string;
   clients: OneCClient[];
+  candidates?: OneCClient[];
+  phone_country?: string;
   checked_at: string | null;
   stale: boolean;
   error: string | null;
+};
+function DetailField({
+  label,
+  value,
+  children,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  children: ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="crm-detail-row">
+      <span>{label}:</span>
+      <Popover position="bottom-end" width={240} shadow="md">
+        <Popover.Target>
+          <button className="crm-inline-value" disabled={disabled}>
+            {value || "—"}
+          </button>
+        </Popover.Target>
+        <Popover.Dropdown>{children}</Popover.Dropdown>
+      </Popover>
+    </div>
+  );
+}
+const regionName = (code?: string) => {
+  if (!code) return "—";
+  try {
+    return new Intl.DisplayNames(["ru"], { type: "region" }).of(code) || code;
+  } catch {
+    return code;
+  }
 };
 const time = (value: string) =>
   new Intl.DateTimeFormat("ru-RU", {
@@ -112,6 +150,12 @@ const errorText = (error: unknown) =>
 export function Inbox({ user }: { user: User }) {
   const { t } = useTranslation("inbox");
   const query = useQueryClient();
+  const personalLanguage = useQuery({
+    queryKey: ["manager-language"],
+    queryFn: () => api<{ language: string }>("/api/me/language"),
+  });
+  const ownLanguage =
+    personalLanguage.data?.language || user.manager_language || "en";
   const [selected, setSelected] = useState<string | null>(
     () =>
       sessionStorage.getItem("crm-open-conversation") ||
@@ -151,6 +195,19 @@ export function Inbox({ user }: { user: User }) {
   const [searchQuery, setSearchQuery] = useState("");
   const initialDraft = useRef(loadDraft(user.id, selected));
   const [message, setMessage] = useState(initialDraft.current?.text || "");
+  const [editingDraft, setEditingDraft] = useState<string | null>(
+    initialDraft.current?.aiDraftId || null,
+  );
+  const [sourceLanguage, setSourceLanguage] = useState(
+    initialDraft.current?.sourceLanguage || ownLanguage,
+  );
+  const [sendLanguage, setSendLanguage] = useState<string | null>(
+    initialDraft.current?.targetLanguage || null,
+  );
+  const [sendError, setSendError] = useState(false);
+  useEffect(() => {
+    if (!message && !editingDraft) setSourceLanguage(ownLanguage);
+  }, [message, editingDraft, ownLanguage]);
   const [file, setFile] = useState<File | null>(
     initialDraft.current?.file || null,
   );
@@ -215,6 +272,9 @@ export function Inbox({ user }: { user: User }) {
         note: boolean;
         quoted: Message | null;
         sendId: string;
+        aiDraftId?: string | null;
+        sourceLanguage?: string;
+        targetLanguage?: string | null;
       }
     >
   >({});
@@ -228,8 +288,23 @@ export function Inbox({ user }: { user: User }) {
         note,
         quoted,
         sendId,
+        aiDraftId: editingDraft,
+        sourceLanguage,
+        targetLanguage: sendLanguage,
       });
-  }, [user.id, selected, message, file, attachment, note, quoted, sendId]);
+  }, [
+    user.id,
+    selected,
+    message,
+    file,
+    attachment,
+    note,
+    quoted,
+    sendId,
+    editingDraft,
+    sourceLanguage,
+    sendLanguage,
+  ]);
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearchQuery(search);
@@ -370,6 +445,9 @@ export function Inbox({ user }: { user: User }) {
           note,
           quoted,
           sendId,
+          aiDraftId: editingDraft,
+          sourceLanguage,
+          targetLanguage: sendLanguage,
         };
       const draft = id
         ? drafts.current[id] || loadDraft(user.id, id)
@@ -380,6 +458,10 @@ export function Inbox({ user }: { user: User }) {
       setOlder([]);
       setHasOlder(true);
       setMessage(draft?.text || "");
+      setEditingDraft(draft?.aiDraftId || null);
+      setSourceLanguage(draft?.sourceLanguage || ownLanguage);
+      setSendLanguage(draft?.targetLanguage || null);
+      setSendError(false);
       setFile(draft?.file || null);
       setAttachment(draft?.attachment || null);
       setQuoted(draft?.quoted || null);
@@ -388,7 +470,20 @@ export function Inbox({ user }: { user: User }) {
       setError("");
       setCustomerError("");
     },
-    [selected, message, file, attachment, note, quoted, sendId, user.id],
+    [
+      selected,
+      message,
+      file,
+      attachment,
+      note,
+      quoted,
+      sendId,
+      user.id,
+      editingDraft,
+      sourceLanguage,
+      sendLanguage,
+      ownLanguage,
+    ],
   );
   useEffect(() => {
     sessionStorage.removeItem("crm-open-conversation");
@@ -409,31 +504,74 @@ export function Inbox({ user }: { user: User }) {
     if (!selected || busy) return;
     setBusy(true);
     setError("");
+    setSendError(false);
     const target = selected;
     try {
       let attachmentId = attachment;
       if (file && !attachmentId) {
         attachmentId = (await uploadFile(file)).id;
-        setAttachment(attachmentId);
+        if (selectedRef.current === target) setAttachment(attachmentId);
+        else if (drafts.current[target]) {
+          drafts.current[target] = {
+            ...drafts.current[target],
+            attachment: attachmentId,
+          };
+          saveDraft(user.id, target, drafts.current[target]);
+        }
       }
-      await api("/api/conversations/" + target + "/messages", "POST", {
-        client_id: sendId,
-        text: message,
-        attachment_id: attachmentId,
-        quoted_message_id: quoted?.id || null,
-        is_private_note: note,
-      });
+      const language =
+        sendLanguage ||
+        (editingDraft
+          ? current.data?.translation?.translation_client_language || ""
+          : current.data?.translation?.translate_outgoing
+            ? current.data.translation.translation_client_language
+            : "original");
+      if (!note && !language)
+        throw new Error(
+          "Язык клиента ещё не определён. Выберите язык отправки.",
+        );
+      if (editingDraft && !note) {
+        await api("/api/drafts/" + editingDraft + "/send-edited", "POST", {
+          final_text: message,
+          source_language: sourceLanguage,
+          target_language: language,
+          attachment_id: attachmentId,
+          quoted_message_id: quoted?.id || null,
+        });
+      } else {
+        await api("/api/conversations/" + target + "/messages", "POST", {
+          client_id: sendId,
+          text: message,
+          attachment_id: attachmentId,
+          quoted_message_id: quoted?.id || null,
+          is_private_note: note,
+          source_language: sourceLanguage,
+          target_language: language || "original",
+        });
+      }
       delete drafts.current[target];
       removeDraft(user.id, target);
-      setMessage("");
-      setFile(null);
-      setAttachment(null);
-      setQuoted(null);
-      setSendId(crypto.randomUUID());
+      if (selectedRef.current === target) {
+        setMessage("");
+        setFile(null);
+        setAttachment(null);
+        setQuoted(null);
+        setSendId(crypto.randomUUID());
+        setEditingDraft(null);
+        setSendLanguage(null);
+        setSourceLanguage(ownLanguage);
+      }
+      void query.invalidateQueries({ queryKey: ["ai-draft", target] });
       refresh();
-      setTimeout(() => end.current?.scrollIntoView({ block: "end" }), 150);
+      setTimeout(() => {
+        if (selectedRef.current === target)
+          end.current?.scrollIntoView({ block: "end" });
+      }, 150);
     } catch (e) {
-      setError(errorText(e));
+      if (selectedRef.current === target) {
+        setError(errorText(e));
+        setSendError(true);
+      }
     } finally {
       setBusy(false);
     }
@@ -550,30 +688,52 @@ export function Inbox({ user }: { user: User }) {
   const customerCard = (
     <div className="crm-customer-content">
       {c?.customer_id && <CustomerSidebar id={c.customer_id} compact />}
-      <h3>{t("customer")}</h3>
-      <TextInput
+      <DetailField
         label={t("chatName")}
-        key={c?.id + ":" + c?.name}
-        defaultValue={c?.name || ""}
+        value={c?.name || ""}
         disabled={!canWrite}
-        onBlur={(e) => {
-          if (e.currentTarget.value !== c?.name)
-            void change({ name: e.currentTarget.value });
-        }}
-      />
-      <p>{c?.phone}</p>
-      <Select
+      >
+        <TextInput
+          aria-label={t("chatName")}
+          key={c?.id + ":" + c?.name}
+          defaultValue={c?.name || ""}
+          onBlur={(e) => {
+            if (e.currentTarget.value !== c?.name)
+              void change({ name: e.currentTarget.value });
+          }}
+        />
+      </DetailField>
+      <div className="crm-detail-row">
+        <span>Телефон:</span>
+        <a href={"tel:" + c?.phone}>{c?.phone || "—"}</a>
+      </div>
+      <div
+        className="crm-detail-row"
+        title="Регион телефонного номера, не место проживания клиента"
+      >
+        <span>Страна номера:</span>
+        <b>{regionName(onec?.phone_country)}</b>
+      </div>
+      <DetailField
         label={t("assignee")}
-        value={c?.assignee_id || null}
-        clearable
+        value={
+          team.data?.find((u) => u.id === c?.assignee_id)?.name || "Не назначен"
+        }
         disabled={!canWrite}
-        data={(team.data || [])
-          .filter((u) => u.role !== "staff")
-          .map((u) => ({ value: u.id, label: u.name }))}
-        onChange={(value) => void change({ assignee_id: value })}
-      />
+      >
+        <Select
+          aria-label={t("assignee")}
+          value={c?.assignee_id || null}
+          clearable
+          comboboxProps={{ withinPortal: false }}
+          data={(team.data || [])
+            .filter((u) => u.role !== "staff")
+            .map((u) => ({ value: u.id, label: u.name }))}
+          onChange={(value) => void change({ assignee_id: value })}
+        />
+      </DetailField>
       <Checkbox
-        mt="md"
+        size="xs"
         label={t("human")}
         checked={!!c?.needs_human}
         disabled={!canWrite}
@@ -581,7 +741,32 @@ export function Inbox({ user }: { user: User }) {
       />
 
       <section className="crm-onec" aria-label={t("onecCustomer")}>
-        <h4>{t("onecCustomer")}</h4>
+        <div
+          className="crm-detail-heading"
+          title={
+            onec?.checked_at
+              ? t("onecChecked") + " " + time(onec.checked_at)
+              : undefined
+          }
+        >
+          <b>
+            {onec?.status === "not_found"
+              ? "Заказы · 1С: не найдены"
+              : "Заказы · 1С"}
+          </b>
+          {canWrite && (
+            <ActionIcon
+              size="sm"
+              variant="subtle"
+              title={t("onecRefresh")}
+              aria-label={t("onecRefresh")}
+              loading={refreshingCustomer || customer.isFetching}
+              onClick={() => void refreshCustomer()}
+            >
+              ↻
+            </ActionIcon>
+          )}
+        </div>
         {customer.isLoading && (
           <p role="status">
             <Loader size="xs" /> {t("onecLoading")}
@@ -594,9 +779,11 @@ export function Inbox({ user }: { user: User }) {
         )}
         {onec && (
           <>
-            {onec.status !== "matched" && (
+            {!["matched", "not_found"].includes(onec.status) && (
               <p className="crm-muted" role="status">
-                {t("onec_" + onec.status)}
+                {onec.status === "unverified"
+                  ? "Точное совпадение телефона не подтверждено"
+                  : t("onec_" + onec.status)}
               </p>
             )}
             {onec.error && onec.status === "unavailable" && (
@@ -606,30 +793,73 @@ export function Inbox({ user }: { user: User }) {
                 })}
               </p>
             )}
+            {!!onec.candidates?.length && (
+              <details className="crm-onec-candidates">
+                <summary>
+                  Возможные совпадения · {onec.candidates.length}
+                </summary>
+                <small>
+                  Подсказки из 1С. Эти клиенты и заказы не привязаны к диалогу и
+                  не используются AI.
+                </small>
+                {onec.candidates.map((client, index) => (
+                  <OneCCustomerDetails key={index} client={client} compact />
+                ))}
+              </details>
+            )}
             {onec.clients.map((client, index) => (
               <OneCCustomerDetails key={index} client={client} compact />
             ))}
             {onec.stale && <p className="crm-onec-stale">{t("onecStale")}</p>}
-            {onec.checked_at && (
+            {onec.checked_at && onec.status !== "not_found" && (
               <small className="crm-muted">
                 {t("onecChecked")} {time(onec.checked_at)}
               </small>
             )}
           </>
         )}
-        {canWrite && (
-          <Button
-            mt="sm"
-            size="xs"
-            variant="light"
-            loading={refreshingCustomer || customer.isFetching}
-            onClick={() => void refreshCustomer()}
-          >
-            {t("onecRefresh")}
-          </Button>
-        )}
       </section>
-      <h4>{t("manualOrders")}</h4>
+      <div className="crm-detail-heading">
+        <span>Заказы вручную: {c?.order_numbers.length || "нет"}</span>
+        {canWrite && (
+          <Popover position="bottom-end" width={230} shadow="md">
+            <Popover.Target>
+              <ActionIcon
+                variant="subtle"
+                size="sm"
+                title={t("linkOrder")}
+                aria-label={t("linkOrder")}
+              >
+                <Plus size={14} />
+              </ActionIcon>
+            </Popover.Target>
+            <Popover.Dropdown>
+              <TextInput
+                aria-label={t("orderNumber")}
+                placeholder={t("orderNumber")}
+                value={order}
+                onChange={(e) => setOrder(e.currentTarget.value)}
+                maxLength={100}
+              />
+              <Button
+                mt="xs"
+                size="xs"
+                disabled={!order.trim()}
+                onClick={() => {
+                  void change({
+                    order_numbers: [
+                      ...new Set([...(c?.order_numbers || []), order.trim()]),
+                    ],
+                  });
+                  setOrder("");
+                }}
+              >
+                {t("linkOrder")}
+              </Button>
+            </Popover.Dropdown>
+          </Popover>
+        )}
+      </div>
       {c?.order_numbers.map((number) => (
         <div className="crm-order" key={number}>
           <span>{number}</span>
@@ -647,33 +877,6 @@ export function Inbox({ user }: { user: User }) {
           )}
         </div>
       ))}
-      {canWrite && (
-        <>
-          <TextInput
-            aria-label={t("orderNumber")}
-            placeholder={t("orderNumber")}
-            value={order}
-            onChange={(e) => setOrder(e.currentTarget.value)}
-            maxLength={100}
-          />
-          <Button
-            mt="xs"
-            size="xs"
-            variant="light"
-            disabled={!order.trim()}
-            onClick={() => {
-              void change({
-                order_numbers: [
-                  ...new Set([...(c?.order_numbers || []), order.trim()]),
-                ],
-              });
-              setOrder("");
-            }}
-          >
-            {t("linkOrder")}
-          </Button>
-        </>
-      )}
       {c && <ConversationTasks conversation={c} />}
       {canWrite && (
         <Button
@@ -917,6 +1120,16 @@ export function Inbox({ user }: { user: User }) {
             {error && !newOpen && (
               <Alert color="red" withCloseButton onClose={() => setError("")}>
                 {error}
+                {sendError && (
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    loading={busy}
+                    onClick={() => void send()}
+                  >
+                    Повторить
+                  </Button>
+                )}
               </Alert>
             )}
             {messages.error && (
@@ -1020,39 +1233,51 @@ export function Inbox({ user }: { user: User }) {
                         <div className="crm-message-text">
                           <LinkedText
                             text={
-                              !originals[selected] &&
-                              m.translation?.state === "ready"
-                                ? m.translation.text || m.text
+                              m.direction === "out"
+                                ? (m.delivery_text ?? m.text)
                                 : m.text
                             }
                           />
                         </div>
                       )}
-                    {!originals[selected] && m.translation && !m.deleted && (
-                      <div className="crm-translation-status">
-                        {m.translation.state === "ready"
-                          ? `Перевод · ${m.translation.source} → ${m.translation.target}`
-                          : m.translation.error === "not_configured"
-                            ? "Для перевода настройте ключ OpenAI. Показан оригинал."
-                            : m.translation.state === "error"
-                              ? "Перевод недоступен. Показан оригинал."
-                              : "Перевод готовится… Показан оригинал."}
-                        {m.translation.state === "error" && canWrite && (
-                          <button
-                            onClick={() =>
-                              void api(
-                                "/api/messages/" + m.id + "/translation/retry",
-                                "POST",
-                              )
-                                .then(refresh)
-                                .catch((e) => setError(errorText(e)))
-                            }
-                          >
-                            Повторить перевод
-                          </button>
-                        )}
-                      </div>
-                    )}
+                    {!originals[selected] &&
+                      m.reading_translation?.state === "ready" &&
+                      m.reading_translation.text &&
+                      m.reading_translation.text !==
+                        (m.direction === "out"
+                          ? (m.delivery_text ?? m.text)
+                          : m.text) && (
+                        <div className="crm-manager-version" dir="auto">
+                          <LinkedText text={m.reading_translation.text} />
+                        </div>
+                      )}
+                    {!originals[selected] &&
+                      m.reading_translation &&
+                      m.reading_translation.state !== "ready" &&
+                      !m.deleted && (
+                        <div className="crm-translation-status">
+                          {m.reading_translation.state === "error"
+                            ? "Перевод недоступен. Показан оригинал."
+                            : "Перевод готовится…"}
+                          {m.reading_translation.state === "error" &&
+                            canWrite && (
+                              <button
+                                onClick={() =>
+                                  void api(
+                                    "/api/messages/" +
+                                      m.id +
+                                      "/translation/retry",
+                                    "POST",
+                                  )
+                                    .then(refresh)
+                                    .catch((e) => setError(errorText(e)))
+                                }
+                              >
+                                Повторить перевод
+                              </button>
+                            )}
+                        </div>
+                      )}
                     {!!m.history?.length && (
                       <details>
                         <summary>{t("v1:previousVersions")}</summary>
@@ -1160,6 +1385,24 @@ export function Inbox({ user }: { user: User }) {
                 conversationId={selected}
                 canWrite={canWrite}
                 isAdmin={user.role === "admin"}
+                managerLanguage={ownLanguage}
+                clientLanguage={c?.translation?.translation_client_language}
+                onEdit={(id, text, source, target) => {
+                  if (selectedRef.current !== selected) return;
+                  setEditingDraft(id);
+                  setMessage(text);
+                  setSourceLanguage(source);
+                  setSendLanguage(target);
+                  setNote(false);
+                  setSendId(crypto.randomUUID());
+                  requestAnimationFrame(() =>
+                    document
+                      .querySelector<HTMLTextAreaElement>(
+                        ".crm-editor textarea",
+                      )
+                      ?.focus(),
+                  );
+                }}
               />
               {canWrite && c && (
                 <QuickReplyPicker
@@ -1172,6 +1415,22 @@ export function Inbox({ user }: { user: User }) {
             </div>
             {canWrite ? (
               <div className={"crm-composer " + (note ? "is-note" : "")}>
+                {editingDraft && (
+                  <div className="crm-file-preview">
+                    <span>
+                      Правка AI-черновика · {languageName(sourceLanguage)}
+                    </span>
+                    <ActionIcon
+                      size={18}
+                      variant="subtle"
+                      title="Продолжить как обычный ответ"
+                      aria-label="Отменить связь с AI-черновиком"
+                      onClick={() => setEditingDraft(null)}
+                    >
+                      <X size={13} />
+                    </ActionIcon>
+                  </div>
+                )}
                 {quoted && (
                   <div className="crm-quote-preview">
                     <span>{quoted.text.slice(0, 150) || t("attachment")}</span>
@@ -1313,28 +1572,48 @@ export function Inbox({ user }: { user: User }) {
                       <span className="crm-action-label">Создать задачу</span>
                     </Button>
                   )}
-                  <Button
-                    className="crm-send"
-                    size="xs"
-                    loading={busy}
-                    title={t("composeHint")}
-                    disabled={!message.trim() && !file}
-                    onClick={() => void send()}
-                  >
-                    <Send size={14} />
-                    <span>
-                      {note ? t("saveNote") : t("send")}
-                      {!note &&
-                      c?.translation?.translate_outgoing &&
-                      c.translation.translation_client_language !==
-                        c.translation.translation_manager_language
-                        ? " · " +
-                          languageName(
-                            c.translation.translation_client_language,
-                          )
-                        : ""}
-                    </span>
-                  </Button>
+                  <div className="crm-send-group">
+                    <Button
+                      className="crm-send"
+                      size="xs"
+                      loading={busy}
+                      title={t("composeHint")}
+                      disabled={!message.trim() && !file}
+                      onClick={() => void send()}
+                    >
+                      <Send size={14} />
+                      <span>
+                        {note ? t("saveNote") : t("send")}
+                        {!note &&
+                        (sendLanguage ||
+                          editingDraft ||
+                          c?.translation?.translate_outgoing)
+                          ? " · " +
+                            languageName(
+                              sendLanguage === "original"
+                                ? sourceLanguage
+                                : sendLanguage ||
+                                    c?.translation
+                                      ?.translation_client_language ||
+                                    sourceLanguage,
+                            )
+                          : ""}
+                      </span>
+                    </Button>
+                    {!note && (
+                      <SendLanguageMenu
+                        value={sendLanguage}
+                        onChange={setSendLanguage}
+                        managerLanguage={sourceLanguage}
+                        clientLanguage={
+                          editingDraft || c?.translation?.translate_outgoing
+                            ? c?.translation?.translation_client_language
+                            : sourceLanguage
+                        }
+                        disabled={busy}
+                      />
+                    )}
+                  </div>
                 </div>
               </div>
             ) : (

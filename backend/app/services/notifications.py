@@ -134,7 +134,11 @@ def prepare_deliveries():
         notifications = db.execute(
             select(Notification, User)
             .join(User, User.id == Notification.user_id)
-            .where(User.active, Notification.created_at > now() - timedelta(days=3))
+            .where(
+                User.active,
+                Notification.kind != "inbox.message",
+                Notification.created_at > now() - timedelta(days=3),
+            )
             .order_by(Notification.created_at.desc())
             .limit(1000)
         ).all()
@@ -189,6 +193,7 @@ async def deliver_notification(delivery_id):
         prefs = user.notification_prefs or {}
         if (
             not user.active
+            or notification.kind == "inbox.message"
             or not prefs.get(row.channel)
             or (row.channel == "telegram" and not user.telegram_chat_id)
         ):
@@ -267,26 +272,3 @@ async def notification_loop():
                 "notifications.recovery.failed", extra={"error_type": type(error).__name__}
             )
         await asyncio.sleep(5)
-
-
-def notify_inbound(db, conversation, message):
-    query = select(User.id).where(User.active, User.role.in_(["admin", "manager"]))
-    if conversation.assignee_id:
-        query = query.where(User.id == conversation.assignee_id)
-    for user_id in db.scalars(query):
-        db.execute(
-            insert(Notification)
-            .values(
-                id=uid(),
-                user_id=user_id,
-                kind="inbox.message",
-                payload={
-                    "conversation_id": conversation.id,
-                    "title": "Новое сообщение",
-                    "text": "Откройте диалог в CRM",
-                },
-                dedupe_key="inbound:" + message.id + ":" + user_id,
-                created_at=now(),
-            )
-            .on_conflict_do_nothing(index_elements=["dedupe_key"])
-        )

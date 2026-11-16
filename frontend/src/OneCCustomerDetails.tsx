@@ -12,12 +12,13 @@ export type OneCOrder = {
 export type OneCClient = {
   name: string;
   country?: string;
+  matched_phone?: string;
   realizations: string[];
   orders?: OneCOrder[];
 };
 
 i18n.addResourceBundle("ru", "onecOrders", {
-  country: "Страна",
+  country: "Страна из 1С",
   orders: "Заказы",
   orderNumber: "Заказ",
   amount: "Сумма",
@@ -27,7 +28,7 @@ i18n.addResourceBundle("ru", "onecOrders", {
   numbersOnly: "Подробности заказов ещё не получены из 1С",
 });
 i18n.addResourceBundle("en", "onecOrders", {
-  country: "Country",
+  country: "Country in 1C",
   orders: "Orders",
   orderNumber: "Order",
   amount: "Amount",

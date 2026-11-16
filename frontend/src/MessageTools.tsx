@@ -80,6 +80,9 @@ export function TranslationFields({
   value,
   onChange,
   disabled = false,
+  managerLanguage,
+  onManagerChange,
+  detectedLanguage,
 }: {
   value: Pick<
     CustomerLite,
@@ -90,6 +93,9 @@ export function TranslationFields({
   >;
   onChange: (fields: Partial<CustomerLite>) => void;
   disabled?: boolean;
+  managerLanguage?: string;
+  onManagerChange?: (language: string) => void;
+  detectedLanguage?: string;
 }) {
   return (
     <Stack gap="xs" className="crm-translation-fields">
@@ -112,21 +118,33 @@ export function TranslationFields({
       <Select
         comboboxProps={{ withinPortal: false }}
         label="Язык клиента"
-        data={languages}
-        value={value.translation_client_language || "en"}
+        data={[
+          { value: "auto", label: "Определять автоматически" },
+          ...languages,
+        ]}
+        value={value.translation_client_language || "auto"}
         searchable
         disabled={disabled}
         onChange={(v) => v && onChange({ translation_client_language: v })}
       />
-      <Select
-        comboboxProps={{ withinPortal: false }}
-        label="Язык менеджера"
-        data={languages}
-        value={value.translation_manager_language || "ru"}
-        searchable
-        disabled={disabled}
-        onChange={(v) => v && onChange({ translation_manager_language: v })}
-      />
+      {value.translation_client_language === "auto" && (
+        <small>
+          Авто:{" "}
+          {detectedLanguage
+            ? languageName(detectedLanguage)
+            : "ещё не определён"}
+        </small>
+      )}
+      {onManagerChange && (
+        <Select
+          comboboxProps={{ withinPortal: false }}
+          label="Мой язык"
+          data={languages}
+          value={managerLanguage || "en"}
+          searchable
+          onChange={(value) => value && onManagerChange(value)}
+        />
+      )}
     </Stack>
   );
 }
@@ -150,8 +168,20 @@ export function TranslationPreferences({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const personal = useQuery({
+    queryKey: ["manager-language"],
+    queryFn: () => api<{ language: string }>("/api/me/language"),
+  });
+  const ownLanguage = personal.data?.language || "en";
   const value = customer.data;
-  const enabled = !!(value?.translate_incoming || value?.translate_outgoing);
+  const clientLanguage =
+    value?.translation_client_language === "auto"
+      ? value.language
+      : value?.translation_client_language;
+  const incoming = value?.incoming_translation_auto
+    ? !!clientLanguage && clientLanguage !== ownLanguage
+    : !!value?.translate_incoming;
+  const enabled = !!(incoming || value?.translate_outgoing);
   async function change(fields: Partial<CustomerLite>) {
     if (!value) return;
     setBusy(true);
@@ -176,6 +206,26 @@ export function TranslationPreferences({
       setBusy(false);
     }
   }
+  async function changePersonal(language: string) {
+    setError("");
+    try {
+      const updated = await api<{ language: string }>(
+        "/api/me/language",
+        "PUT",
+        { language },
+      );
+      query.setQueryData(["manager-language"], updated);
+      for (const key of [
+        "conversation",
+        "conversations",
+        "messages",
+        "ai-draft",
+      ])
+        void query.invalidateQueries({ queryKey: [key] });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
+  }
   return (
     <Popover position="bottom-end" width={300} withinPortal shadow="md">
       <Popover.Target>
@@ -185,7 +235,7 @@ export function TranslationPreferences({
           title="Входящие: язык клиента → язык менеджера. Исходящие: язык менеджера → язык клиента."
         >
           {enabled
-            ? `${languageName(value?.translation_client_language || "en")} → ${languageName(value?.translation_manager_language || "ru")}`
+            ? `${clientLanguage ? languageName(clientLanguage) : "авто"} → ${languageName(ownLanguage)}`
             : "Перевод: выкл"}
         </Button>
       </Popover.Target>
@@ -193,7 +243,10 @@ export function TranslationPreferences({
         {error && <Alert color="red">{error}</Alert>}
         {value && (
           <TranslationFields
-            value={value}
+            value={{ ...value, translate_incoming: incoming }}
+            managerLanguage={ownLanguage}
+            onManagerChange={(language) => void changePersonal(language)}
+            detectedLanguage={value.language}
             onChange={(fields) => void change(fields)}
             disabled={!canWrite || busy}
           />
@@ -207,6 +260,60 @@ export function TranslationPreferences({
         />
       </Popover.Dropdown>
     </Popover>
+  );
+}
+
+export function SendLanguageMenu({
+  value,
+  onChange,
+  managerLanguage,
+  clientLanguage,
+  disabled = false,
+}: {
+  value: string | null;
+  onChange: (language: string | null) => void;
+  managerLanguage: string;
+  clientLanguage?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <Menu withinPortal={false} position="top-end">
+      <Menu.Target>
+        <ActionIcon
+          variant="light"
+          disabled={disabled}
+          title="Язык одной отправки"
+          aria-label="Язык отправки"
+        >
+          <ChevronDown size={14} />
+        </ActionIcon>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Item
+          color={!value ? "teal" : undefined}
+          onClick={() => onChange(null)}
+        >
+          По умолчанию
+          {clientLanguage ? " · " + languageName(clientLanguage) : ""}
+        </Menu.Item>
+        <Menu.Item
+          color={value === "original" ? "teal" : undefined}
+          onClick={() => onChange("original")}
+        >
+          На языке менеджера, без перевода · {languageName(managerLanguage)}
+        </Menu.Item>
+        <Menu.Divider />
+        {languages.map((language) => (
+          <Menu.Item
+            key={language.value}
+            color={value === language.value ? "teal" : undefined}
+            onClick={() => onChange(language.value)}
+          >
+            {languageName(language.value)}
+          </Menu.Item>
+        ))}
+      </Menu.Dropdown>
+    </Menu>
   );
 }
 
@@ -301,7 +408,9 @@ export function MessageActions({
             disabled={!m.text}
             onClick={() =>
               void navigator.clipboard
-                .writeText(m.text)
+                .writeText(
+                  m.direction === "out" ? (m.delivery_text ?? m.text) : m.text,
+                )
                 .catch(() => setError("Не удалось скопировать текст"))
             }
           >

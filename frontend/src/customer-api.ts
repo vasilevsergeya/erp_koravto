@@ -5,6 +5,7 @@ export type CustomerLite = {
   display_name: string;
   name_manual: boolean;
   language: string;
+  incoming_translation_auto?: boolean;
   translate_incoming: boolean;
   translate_outgoing: boolean;
   translation_client_language: string;
