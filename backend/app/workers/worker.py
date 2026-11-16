@@ -36,6 +36,7 @@ from app.services.outbox import deliver_message, status_forward
 from app.services.response_state import acknowledge_reply, refresh_unanswered
 from app.services.storage import download_attachment, save_file
 from app.services.tasks import overdue_reminders
+from app.services.webhook_queue import MAX_ATTEMPTS, error_code, pending_condition
 
 log = logging.getLogger("crm")
 
@@ -283,8 +284,8 @@ async def process_webhook(ctx, event_id: str):
             event = db.get(WebhookEvent, event_id)
             if event:
                 event.attempts += 1
-                event.state = "error" if event.attempts < 10 else "failed"
-                event.last_error = type(error).__name__[:100]
+                event.state = "error" if event.attempts < MAX_ATTEMPTS else "failed"
+                event.last_error = error_code(error)
                 event.next_attempt_at = now() + timedelta(seconds=min(300, 2**event.attempts))
                 db.commit()
         log.warning(
@@ -314,7 +315,7 @@ async def recover_pending(ctx):
                 pending = db.scalars(
                     select(WebhookEvent.id)
                     .where(
-                        WebhookEvent.state.in_(["pending", "error"]),
+                        pending_condition(),
                         WebhookEvent.next_attempt_at <= now(),
                     )
                     .order_by(WebhookEvent.created_at)

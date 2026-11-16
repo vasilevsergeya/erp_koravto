@@ -14,6 +14,7 @@ from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
 from app.models import IntegrationHealth, Notification, User, WebhookEvent, now, uid
 from app.services.ai_config import settings, working_time
 from app.services.outbox import emit
+from app.services.webhook_queue import pending_condition
 
 WARNINGS = {
     "channel_inactive": "Один из каналов Wazzup неактивен. Проверьте подключение WhatsApp.",
@@ -39,11 +40,7 @@ async def check_once():
         last_hook = db.scalar(
             select(func.max(WebhookEvent.created_at)).where(WebhookEvent.state != "test")
         )
-        oldest = db.scalar(
-            select(func.min(WebhookEvent.created_at)).where(
-                WebhookEvent.state.in_(["pending", "error", "failed"])
-            )
-        )
+        oldest = db.scalar(select(func.min(WebhookEvent.created_at)).where(pending_condition()))
         quiet = (last_hook is None or last_hook < now() - timedelta(minutes=30)) and working_time(
             settings(db), now()
         )

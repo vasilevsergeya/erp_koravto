@@ -1,6 +1,7 @@
+import logging
 import secrets
 from datetime import timedelta
-from typing import cast
+from typing import NoReturn, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -19,7 +20,14 @@ from app.models import AuditEvent, LoginSession, User, UserAccessToken, now
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 COOKIE = "__Host-crm_session"
+SESSION_LIFETIME = timedelta(hours=8)
 DUMMY_HASH = hash_password(secrets.token_urlsafe(32))
+
+
+def unauthorized(reason: str) -> NoReturn:
+    # Fixed reason codes only: no cookies, hashes, credentials or user data.
+    logging.getLogger("crm").info("auth.rejected", extra={"error_type": reason})
+    raise HTTPException(401, "Войдите в систему")
 
 
 def rate_limit(key: str, limit: int, seconds: int):
@@ -37,11 +45,13 @@ def rate_limit(key: str, limit: int, seconds: int):
 def auth_session(request: Request, db: Session = Depends(get_db)) -> tuple[LoginSession, User]:
     raw = request.cookies.get(COOKIE, "")
     session = db.get(LoginSession, token_hash(raw)) if raw else None
-    if session is None or session.expires_at <= now():
-        raise HTTPException(401, "Войдите в систему")
+    if session is None:
+        unauthorized("missing_session" if raw else "missing_cookie")
+    if session.expires_at <= now():
+        unauthorized("expired_session")
     user = db.get(User, session.user_id)
     if user is None or not user.active:
-        raise HTTPException(401, "Войдите в систему")
+        unauthorized("inactive_user")
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         if not secrets.compare_digest(session.csrf_token, request.headers.get("X-CSRF-Token", "")):
             raise HTTPException(403, "Обновите страницу и повторите действие")
@@ -71,6 +81,7 @@ def describe(session, user):
         "role": user.role,
         "csrf_token": session.csrf_token,
         "must_change_password": user.must_change_password,
+        "session_expires_at": session.expires_at,
     }
 
 
@@ -107,7 +118,7 @@ def login(body: LoginInput, request: Request, response: Response, db: Session = 
         user_id=user.id,
         csrf_token=secrets.token_hex(32),
         expires_at=now()
-        + (timedelta(minutes=15) if user.must_change_password else timedelta(hours=8)),
+        + (timedelta(minutes=15) if user.must_change_password else SESSION_LIFETIME),
     )
     db.add(session)
     db.add(AuditEvent(user_id=user.id, action="auth.password_verified", target="session"))
@@ -121,6 +132,40 @@ def login(body: LoginInput, request: Request, response: Response, db: Session = 
 @router.get("/me")
 def me(auth=Depends(auth_session)):
     return describe(*auth)
+
+
+@router.post("/refresh")
+def refresh_session(
+    request: Request, response: Response, auth=Depends(auth_session), db: Session = Depends(get_db)
+):
+    session, user = auth
+    # Recheck under lock: a concurrent logout/password reset must not be undone.
+    session = db.scalar(
+        select(LoginSession)
+        .where(LoginSession.token_hash == session.token_hash)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if session is None or session.expires_at <= now():
+        unauthorized("expired_or_revoked_session")
+    user = db.get(User, user.id, populate_existing=True)
+    if user is None or not user.active:
+        unauthorized("inactive_user")
+    # Temporary-password sessions retain their original short deadline.
+    if not user.must_change_password:
+        session.expires_at = now() + SESSION_LIFETIME
+    remaining = max(1, int((session.expires_at - now()).total_seconds()))
+    db.commit()
+    response.set_cookie(
+        COOKIE,
+        request.cookies[COOKIE],
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=remaining,
+        path="/",
+    )
+    return describe(session, user)
 
 
 @router.post("/password")

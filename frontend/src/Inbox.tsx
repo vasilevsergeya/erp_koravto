@@ -30,6 +30,7 @@ import { ConversationTasks, createTask, openTask } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
 import { QuickReplyPicker } from "./QuickReplies";
 import { DraftPanel } from "./AI";
+import { loadDraft, saveDraft, removeDraft } from "./inbox-drafts";
 import { taskLabel } from "./task-i18n";
 import { OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
 
@@ -62,7 +63,8 @@ export function Inbox({ user }: { user: User }) {
   const [selected, setSelected] = useState<string | null>(
     () =>
       sessionStorage.getItem("crm-open-conversation") ||
-      new URLSearchParams(location.search).get("conversation"),
+      new URLSearchParams(location.search).get("conversation") ||
+      sessionStorage.getItem(`crm-active-conversation:${user.id}`),
   );
   useEffect(() => {
     sessionStorage.removeItem("crm-open-conversation");
@@ -75,15 +77,16 @@ export function Inbox({ user }: { user: User }) {
   const [search, setSearch] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(0);
-  const [message, setMessage] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [attachment, setAttachment] = useState<string | null>(null);
-  const [note, setNote] = useState(false);
+  const initialDraft = useRef(loadDraft(user.id, selected));
+  const [message, setMessage] = useState(initialDraft.current?.text || "");
+  const [file, setFile] = useState<File | null>(initialDraft.current?.file || null);
+  const [attachment, setAttachment] = useState<string | null>(initialDraft.current?.attachment || null);
+  const [note, setNote] = useState(initialDraft.current?.note || false);
   const [originals, setOriginals] = useState<Record<string, boolean>>({});
-  const [quoted, setQuoted] = useState<Message | null>(null);
+  const [quoted, setQuoted] = useState<Message | null>(initialDraft.current?.quoted || null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [sendId, setSendId] = useState<string>(() => crypto.randomUUID());
+  const [sendId, setSendId] = useState<string>(() => initialDraft.current?.sendId || crypto.randomUUID());
   const [older, setOlder] = useState<Message[]>([]);
   const [hasOlder, setHasOlder] = useState(true);
   const [newOpen, setNewOpen] = useState(false);
@@ -134,6 +137,9 @@ export function Inbox({ user }: { user: User }) {
     >
   >({});
   const canWrite = user.role === "admin" || user.role === "manager";
+  useEffect(() => {
+    if (selected) saveDraft(user.id, selected, { text: message, file, attachment, note, quoted, sendId });
+  }, [user.id, selected, message, file, attachment, note, quoted, sendId]);
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearchQuery(search);
@@ -257,7 +263,7 @@ export function Inbox({ user }: { user: User }) {
         quoted,
         sendId,
       };
-    const draft = id ? drafts.current[id] : undefined;
+    const draft = id ? drafts.current[id] || loadDraft(user.id, id) : undefined;
     setSelected(id);
     setOlder([]);
     setHasOlder(true);
@@ -289,6 +295,7 @@ export function Inbox({ user }: { user: User }) {
         is_private_note: note,
       });
       delete drafts.current[target];
+      removeDraft(user.id, target);
       setMessage("");
       setFile(null);
       setAttachment(null);

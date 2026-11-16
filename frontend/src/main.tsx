@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import {
   QueryClient,
   QueryClientProvider,
@@ -42,16 +43,20 @@ import { CustomersPage } from "./Customers";
 import { InboxReport } from "./InboxReport";
 import { TeamAdmin, AccessLink } from "./TeamAdmin";
 import { QuickReplySettings } from "./QuickReplies";
+import { IntegrationQueue } from "./IntegrationQueue";
 import { AISettings, AIReport } from "./AI";
 import {
   NotificationIntegration,
   PersonalNotifications,
   NotificationEvents,
 } from "./Notifications";
-import { api, ApiError, setCsrf, type User, type Setting } from "./api";
+import { api, ApiError, refreshSession, SessionExpiredError, setCsrf, setSession, type User, type Setting } from "./api";
 
 const client = new QueryClient({
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } },
+  defaultOptions: { queries: {
+    retry: (count, error) => !(error instanceof ApiError && error.status === 401) && count < 1,
+    refetchOnWindowFocus: true,
+  } },
 });
 const stamp = (value: string | null) =>
   value
@@ -385,6 +390,7 @@ function SettingsPage() {
           <ShieldCheck size={17} />
           {t("secretsHint")}
         </div>
+        <IntegrationQueue />
         {settings.error && <Alert color="red">{errText(settings.error)}</Alert>}
         {settings.data
           ?.filter((s) => s.key === "wazzup.api_key")
@@ -551,12 +557,14 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     let socket: WebSocket;
     let timer: ReturnType<typeof setTimeout>;
     let disposed = false;
+    let delay = 3000;
     function connect() {
       if (disposed) return;
       socket = new WebSocket(
         location.origin.replace(/^http/, "ws") + "/api/ws",
       );
       socket.onopen = () => {
+        delay = 3000;
         void query.invalidateQueries();
       };
       socket.onmessage = (event) => {
@@ -617,8 +625,15 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           /* reconnect/poll provides recovery */
         }
       };
-      socket.onclose = () => {
-        if (!disposed) timer = setTimeout(connect, 3000);
+      socket.onclose = async () => {
+        if (disposed) return;
+        // Includes a rejected upgrade (1006) as well as an expired live socket (1008).
+        try { await refreshSession(); }
+        catch (error) { if (error instanceof SessionExpiredError) return; }
+        if (!disposed) {
+          timer = setTimeout(connect, delay);
+          delay = Math.min(delay * 2, 30000);
+        }
       };
     }
     connect();
@@ -628,6 +643,33 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       socket?.close();
     };
   }, [query]);
+  useEffect(() => {
+    let lastActivity = Date.now();
+    let lastRefresh = 0;
+    let renewing = false;
+    const tick = () => {
+      if (document.visibilityState !== "visible" || renewing ||
+          Date.now() - lastActivity > 15 * 60_000 || Date.now() - lastRefresh < 5 * 60_000) return;
+      renewing = true;
+      lastRefresh = Date.now();
+      void refreshSession().catch(() => {
+        // Temporary connectivity errors do not log the manager out.
+        lastRefresh = Date.now() - 4 * 60_000;
+      }).finally(() => { renewing = false; });
+    };
+    const activity = () => { lastActivity = Date.now(); tick(); };
+    const visible = () => { if (document.visibilityState === "visible") activity(); };
+    const events = ["pointerdown", "keydown", "wheel", "touchstart"];
+    for (const event of events) window.addEventListener(event, activity, { passive: true });
+    document.addEventListener("visibilitychange", visible);
+    const timer = setInterval(tick, 60_000);
+    tick();
+    return () => {
+      clearInterval(timer);
+      for (const event of events) window.removeEventListener(event, activity);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, []);
   useEffect(() => {
     const show = () => setPage("inbox");
     const customer = () => setPage("customers");
@@ -766,9 +808,29 @@ function App() {
   const [user, userSet] = useState<User | null>(null);
   const [loading, loadingSet] = useState(true);
   const [error, errorSet] = useState("");
+  const [sessionEnded, setSessionEnded] = useState(false);
   const update = useCallback((value: User) => {
-    setCsrf(value.csrf_token);
+    setSession(value);
+    setSessionEnded(false);
     userSet(value);
+  }, []);
+  useEffect(() => {
+    const expired = () => {
+      // Unmount all query error panels before their rejected promises can render.
+      flushSync(() => { userSet(null); setSessionEnded(true); });
+      void client.cancelQueries();
+      client.clear();
+    };
+    const refreshed = (event: Event) => {
+      const value = (event as CustomEvent<User>).detail;
+      userSet(value);
+    };
+    window.addEventListener("crm:session-expired", expired);
+    window.addEventListener("crm:session-updated", refreshed);
+    return () => {
+      window.removeEventListener("crm:session-expired", expired);
+      window.removeEventListener("crm:session-updated", refreshed);
+    };
   }, []);
   const load = useCallback(() => {
     loadingSet(true);
@@ -789,7 +851,7 @@ function App() {
     } finally {
       client.clear();
       userSet(null);
-      setCsrf("");
+      setSession(null);
     }
   }
   if (loading)
@@ -810,7 +872,12 @@ function App() {
       </div>
     );
   if (!user || user.must_change_password)
-    return <Auth user={user} onUser={update} />;
+    return <>
+      {sessionEnded && <Alert color="orange" role="status">
+        Сессия завершена. Войдите снова — открытый диалог и текст ответа сохранены.
+      </Alert>}
+      <Auth user={user} onUser={update} />
+    </>;
   return <Workspace user={user} onLogout={() => void logout()} />;
 }
 
