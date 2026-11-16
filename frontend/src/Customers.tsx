@@ -27,6 +27,7 @@ import {
 import "./customer-i18n";
 import "./customers.css";
 import { TranslationFields } from "./MessageTools";
+import { OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
 
 type CustomerDetail = CustomerLite & {
   redirected_from?: string | null;
@@ -42,7 +43,7 @@ type CustomerDetail = CustomerLite & {
     onec: {
       status: string;
       stale: boolean;
-      clients: { name: string; realizations: string[] }[];
+      clients: OneCClient[];
     };
   }[];
   tasks: {
@@ -430,16 +431,7 @@ function CustomerView({
                   {chat.onec.stale ? " · " + t("stale") : ""}
                 </small>
                 {chat.onec.clients.map((cl, i) => (
-                  <div key={i}>
-                    <strong dir="auto">{cl.name}</strong>
-                    <div className="customer-tags">
-                      {cl.realizations.map((o, j) => (
-                        <Badge variant="outline" key={j}>
-                          {o}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
+                  <OneCCustomerDetails key={i} client={cl} />
                 ))}
               </div>
             ))}

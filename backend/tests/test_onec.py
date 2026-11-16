@@ -65,6 +65,64 @@ class OneCContractTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(OneCError):
                     await OneCAdapter("http://onec.invalid/prod", "u", "p").customers(phone)
 
+    async def test_order_details_preserve_zero_amounts_tracking_and_duplicate_numbers(self):
+        clients = [
+            {
+                "name": "Synthetic customer",
+                "country": "Australia",
+                "realizations": ["000123", "000123"],
+                "orders": [
+                    {
+                        "number": "000123",
+                        "amount": 1234.56,
+                        "shipping_number": "001234567890",
+                        "project": "Korean.parts",
+                    },
+                    {"number": "000123", "amount": 0, "shipping_number": "", "project": ""},
+                ],
+            },
+            {"name": "Synthetic customer", "country": "", "realizations": [], "orders": []},
+        ]
+        with self.transport(lambda r: httpx.Response(200, json={"clients": clients})):
+            result = await OneCAdapter("http://onec.invalid/prod", "u", "p").customers(
+                "12025550123"
+            )
+        self.assertEqual(result, clients)
+
+    async def test_invalid_details_cannot_be_attached_to_other_orders(self):
+        order = {"number": "000123", "amount": 12.34, "shipping_number": "0001", "project": "Web"}
+        invalid = [
+            {"country": None},
+            {"orders": None},
+            {"orders": []},
+            {"orders": [order, order]},
+            {"orders": [{**order, "number": "different-order"}]},
+            {"orders": [{**order, "shipping_number": 1}]},
+            {"orders": [{**order, "project": {"name": "Web"}}]},
+            *({"orders": [{**order, "amount": amount}]} for amount in (None, "12.34", True)),
+        ]
+        for fields in invalid:
+            with self.subTest(fields=fields):
+                client = {"name": "Synthetic", "realizations": ["000123"], **fields}
+                with self.transport(lambda r: httpx.Response(200, json={"clients": [client]})):
+                    with self.assertRaises(OneCError) as caught:
+                        await OneCAdapter("http://onec.invalid/prod", "u", "p").customers(
+                            "12025550123"
+                        )
+                self.assertEqual(caught.exception.code, "invalid_response")
+
+    async def test_nonfinite_amount_is_rejected(self):
+        for amount in ("NaN", "Infinity", "-Infinity", "1e999"):
+            body = (
+                '{"clients":[{"name":"Synthetic","realizations":["01"],'
+                '"orders":[{"number":"01","amount":' + amount + ","
+                '"shipping_number":"","project":""}]}]}'
+            )
+            with self.transport(lambda r: httpx.Response(200, text=body)):
+                with self.assertRaises(OneCError) as caught:
+                    await OneCAdapter("http://onec.invalid/prod", "u", "p").customers("12025550123")
+            self.assertEqual(caught.exception.code, "invalid_response")
+
     async def test_empty_result_and_safe_errors(self):
         for response, code in [
             (httpx.Response(200, json={"clients": []}), None),
