@@ -1,6 +1,10 @@
+import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import {
   Alert,
+  ActionIcon,
+  Menu,
+  Popover,
   Button,
   Checkbox,
   Modal,
@@ -167,24 +171,32 @@ export function TranslationPreferences({
     }
   }
   return (
-    <section className="crm-translation-preferences">
-      <h3>Перевод диалога</h3>
-      {error && <Alert color="red">{error}</Alert>}
-      {value && (
-        <TranslationFields
-          value={value}
-          onChange={(fields) => void change(fields)}
-          disabled={!canWrite || busy}
+    <Popover position="bottom-end" width={300} withinPortal shadow="md">
+      <Popover.Target>
+        <Button size="xs" variant="subtle" title="Настройки перевода">
+          {enabled
+            ? `${value?.translation_client_language || "авто"} → ${value?.translation_manager_language || "en"}`
+            : "Перевод: выкл"}
+        </Button>
+      </Popover.Target>
+      <Popover.Dropdown>
+        {error && <Alert color="red">{error}</Alert>}
+        {value && (
+          <TranslationFields
+            value={value}
+            onChange={(fields) => void change(fields)}
+            disabled={!canWrite || busy}
+          />
+        )}
+        <Checkbox
+          mt="sm"
+          label="Показать на языке оригинала"
+          checked={!enabled || original}
+          disabled={!enabled}
+          onChange={(e) => onOriginal(e.currentTarget.checked)}
         />
-      )}
-      <Checkbox
-        mt="sm"
-        label="Показать на языке оригинала"
-        checked={!enabled || original}
-        disabled={!enabled}
-        onChange={(e) => onOriginal(e.currentTarget.checked)}
-      />
-    </section>
+      </Popover.Dropdown>
+    </Popover>
   );
 }
 
@@ -192,15 +204,20 @@ export function MessageActions({
   message: m,
   user,
   onChanged,
+  onReply,
 }: {
   message: Message;
   user: User;
   onChanged: () => void;
+  onReply: () => void;
 }) {
   const [edit, setEdit] = useState(false),
     [text, setText] = useState("");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [confirmAction, setConfirmAction] = useState<"hide" | "delete" | null>(
+    null,
+  );
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
   const owned = m.author_id === user.id || user.role === "admin";
   const active =
@@ -215,24 +232,6 @@ export function MessageActions({
     (m.is_private_note || m.external || unsent || m.status === "error");
   async function change(action: "edit" | "delete" | "hide") {
     if (busy) return;
-    if (
-      action === "delete" &&
-      !window.confirm(
-        m.is_private_note
-          ? "Удалить внутреннюю заметку?"
-          : unsent
-            ? "Отменить отправку сообщения?"
-            : "Удалить сообщение у себя и у клиента?",
-      )
-    )
-      return;
-    if (
-      action === "hide" &&
-      !window.confirm(
-        "Скрыть сообщение только для вас? У клиента и других сотрудников оно останется.",
-      )
-    )
-      return;
     setBusy(true);
     setError("");
     try {
@@ -243,6 +242,7 @@ export function MessageActions({
         text: action === "edit" ? text : "",
       });
       setEdit(false);
+      setConfirmAction(null);
       setOperationId(crypto.randomUUID());
       onChanged();
     } catch (e) {
@@ -268,32 +268,99 @@ export function MessageActions({
   }
   return (
     <>
-      <div className="crm-message-tools">
-        {writable && !m.attachment_url && !active && (
-          <button
-            disabled={busy}
-            onClick={() => {
-              setText(m.text);
-              setOperationId(crypto.randomUUID());
-              setEdit(true);
-            }}
+      <Menu withinPortal position="bottom-end">
+        <Menu.Target>
+          <ActionIcon
+            size={14}
+            variant="subtle"
+            className="crm-message-menu"
+            aria-label="Действия с сообщением"
+            title="Действия с сообщением"
           >
-            Редактировать
-          </button>
-        )}
-        {writable && !active && (
-          <button disabled={busy} onClick={() => void change("delete")}>
-            {m.is_private_note
-              ? "Удалить заметку"
+            <ChevronDown size={12} />
+          </ActionIcon>
+        </Menu.Target>
+        <Menu.Dropdown>
+          {!m.is_private_note &&
+            !m.deleted &&
+            m.external &&
+            m.author_type !== "system" && (
+              <Menu.Item onClick={onReply}>Ответить</Menu.Item>
+            )}
+          <Menu.Item
+            disabled={!m.text}
+            onClick={() =>
+              void navigator.clipboard
+                .writeText(m.text)
+                .catch(() => setError("Не удалось скопировать текст"))
+            }
+          >
+            Скопировать текст
+          </Menu.Item>
+          {writable && !m.attachment_url && !active && (
+            <Menu.Item
+              disabled={busy}
+              onClick={() => {
+                setText(m.text);
+                setOperationId(crypto.randomUUID());
+                setEdit(true);
+              }}
+            >
+              Редактировать
+            </Menu.Item>
+          )}
+          {writable && !active && (
+            <Menu.Item
+              disabled={busy}
+              color="red"
+              onClick={() => setConfirmAction("delete")}
+            >
+              {m.is_private_note
+                ? "Удалить заметку"
+                : unsent
+                  ? "Отменить отправку"
+                  : "Удалить у всех"}
+            </Menu.Item>
+          )}
+          <Menu.Item disabled={busy} onClick={() => setConfirmAction("hide")}>
+            Удалить у себя
+          </Menu.Item>
+        </Menu.Dropdown>
+      </Menu>
+      <Modal
+        opened={confirmAction !== null}
+        onClose={() => !busy && setConfirmAction(null)}
+        title={
+          confirmAction === "hide" ? "Удалить у себя?" : "Удалить сообщение?"
+        }
+        centered
+      >
+        <p>
+          {confirmAction === "hide"
+            ? "Сообщение останется у клиента и других сотрудников."
+            : m.is_private_note
+              ? "Внутренняя заметка будет удалена."
               : unsent
-                ? "Отменить отправку"
-                : "Удалить у всех"}
-          </button>
-        )}
-        <button disabled={busy} onClick={() => void change("hide")}>
-          Удалить у себя
-        </button>
-      </div>
+                ? "Отправка будет отменена."
+                : "Сообщение будет удалено у вас и у клиента."}
+        </p>
+        {error && <Alert color="red">{error}</Alert>}
+        <Button
+          color="red"
+          loading={busy}
+          onClick={() => confirmAction && void change(confirmAction)}
+        >
+          Удалить
+        </Button>
+        <Button
+          ml="sm"
+          variant="default"
+          disabled={busy}
+          onClick={() => setConfirmAction(null)}
+        >
+          Отмена
+        </Button>
+      </Modal>
       {m.action && ["queued", "processing"].includes(m.action.state) && (
         <small>Изменение выполняется…</small>
       )}

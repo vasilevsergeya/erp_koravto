@@ -1,0 +1,315 @@
+/* Dialog workspace: bounded viewport, independent scroll regions. */
+.topbar {
+  height: 40px;
+  padding: 0 12px;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.topbar .timezone {
+  margin-right: auto;
+}
+.topbar .health {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.topbar .health.warning {
+  color: #ad6800;
+}
+.page-heading {
+  height: 36px;
+  margin: 0 0 12px;
+}
+.page-heading h1 {
+  font-size: 24px;
+  margin: 0;
+}
+.workspace-inbox {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-inbox .main {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.workspace-inbox .page-body {
+  padding: 8px;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: none;
+  overflow: hidden;
+  margin: 0;
+}
+.crm-inbox {
+  height: 100%;
+  min-height: 0;
+  border-radius: 8px;
+  grid-template-columns: 280px minmax(0, 1fr) 250px;
+}
+.crm-inbox.panel-collapsed {
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+.crm-toolbar {
+  height: 44px;
+  flex-shrink: 0;
+  padding: 6px;
+  gap: 4px;
+  border-bottom: 1px solid #e4ebe6;
+}
+.crm-toolbar > .mantine-InputWrapper-root {
+  flex: 1;
+  min-width: 40px;
+}
+.crm-toolbar .mantine-Button-root {
+  padding: 0 6px;
+  max-width: 150px;
+}
+.crm-dialog-list {
+  min-height: 0;
+  position: relative;
+  overflow-anchor: none;
+}
+.crm-dialog {
+  height: 52px;
+  padding: 6px 10px;
+  border-left: 3px solid transparent;
+}
+.crm-dialog.waiting_us {
+  border-left-color: #2aa07c;
+}
+.crm-dialog.selected {
+  box-shadow: none;
+  background: #e7f3ed;
+}
+.crm-dialog.closed b {
+  color: #88958e;
+}
+.crm-dialog-line {
+  height: 18px;
+  gap: 4px !important;
+}
+.crm-dialog-line + div {
+  margin-top: 2px;
+}
+.crm-dialog-line b {
+  min-width: 0;
+  font-size: 12px;
+}
+.crm-dialog-line > svg {
+  flex-shrink: 0;
+}
+.crm-dialog-line time {
+  font-size: 10px;
+  color: #7a887f;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.crm-dialog-line p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  line-height: 18px;
+}
+.crm-dialog-line .mantine-Badge-root {
+  flex-shrink: 0;
+  font-size: 9px;
+  padding: 0 4px;
+  height: 15px;
+}
+.crm-list-loading {
+  text-align: center;
+  height: 24px;
+  padding: 4px;
+}
+.crm-thread {
+  position: relative;
+  container-type: inline-size;
+}
+.crm-thread-header {
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  gap: 5px;
+}
+.crm-thread-header > div:first-of-type {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  overflow: hidden;
+}
+.crm-thread-header b {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-thread-header small {
+  white-space: nowrap;
+  display: inline;
+  font-size: 10px;
+}
+.crm-thread-header .mantine-Badge-root {
+  font-size: 9px;
+  flex-shrink: 0;
+}
+.crm-thread-header > .mantine-Button-root {
+  padding: 0 4px;
+  font-size: 10px;
+}
+.crm-thread-header > .mantine-ActionIcon-root {
+  flex-shrink: 0;
+}
+.crm-messages {
+  min-height: 0;
+  gap: 0;
+  padding: 10px 12px;
+  overflow-anchor: none;
+}
+.crm-message {
+  flex-shrink: 0;
+  margin-top: 10px;
+  padding: 6px 8px;
+  max-width: 90%;
+  border: 0;
+  border-radius: 8px;
+}
+.crm-message.same-author {
+  margin-top: 4px;
+}
+.crm-message-text {
+  line-height: 17px;
+  font-size: 13px;
+}
+.crm-message footer {
+  margin-top: 0;
+  gap: 5px;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  min-height: 14px;
+  font-size: 9px;
+  line-height: 14px;
+}
+.crm-message-author {
+  font-size: 9px;
+  margin: 0;
+}
+.crm-message-menu {
+  opacity: 0;
+}
+.crm-message:hover .crm-message-menu,
+.crm-message:focus-within .crm-message-menu {
+  opacity: 1;
+}
+.crm-message-menu[data-expanded] {
+  opacity: 1;
+}
+.crm-date-separator {
+  flex-shrink: 0;
+  align-self: center;
+  font-size: 10px;
+  color: #7b887f;
+  background: #e8ede9;
+  border-radius: 8px;
+  padding: 2px 10px;
+  margin: 8px 0;
+}
+.crm-attachment img,
+.crm-attachment video {
+  max-height: 220px;
+}
+.crm-message blockquote {
+  padding: 3px 6px;
+  margin: 0 0 4px;
+}
+.crm-customer {
+  padding: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+.crm-quote-preview {
+  height: 28px;
+  padding: 3px 6px;
+  align-items: center;
+  margin: 0 0 4px;
+}
+.crm-quote-preview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-select-prompt {
+  grid-column: 2/-1;
+}
+@media (hover: none) {
+  .crm-message-menu {
+    opacity: 1;
+  }
+}
+@media (max-width: 1100px) {
+  .crm-inbox {
+    grid-template-columns: 240px minmax(0, 1fr) 220px;
+  }
+  .crm-inbox.panel-collapsed {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+  .crm-customer {
+    display: block;
+  }
+}
+@media (max-width: 760px) {
+  .workspace-inbox .main {
+    padding-top: 48px;
+  }
+  .sidebar {
+    height: 48px;
+  }
+  .sidebar nav button {
+    padding: 8px;
+  }
+  .sidebar .brand {
+    font-size: 11px;
+  }
+  .topbar {
+    height: 40px;
+  }
+  .workspace-inbox .page-body {
+    padding: 4px;
+  }
+  .crm-inbox {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+  .crm-customer {
+    display: none;
+  }
+}
+@media (max-width: 700px) {
+  .crm-inbox,
+  .crm-inbox.panel-collapsed {
+    display: flex;
+    min-height: 0;
+    height: 100%;
+  }
+  .crm-inbox.has-selection .crm-dialogs {
+    display: none;
+  }
+  .crm-thread-header small {
+    display: none;
+  }
+  .crm-thread-header .crm-back {
+    display: block;
+    padding: 0 3px;
+  }
+  .crm-thread-header .crm-back .mantine-Button-label {
+    font-size: 10px;
+  }
+  .crm-message {
+    max-width: 95%;
+  }
+}

@@ -1,0 +1,144 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>ERP · локальная проверка</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const dialogs = Array.from({ length: 142 }, (_, i) => ({
+        id: "dialog-" + i,
+        name: "Клиент " + (i + 1),
+        display_name: "Клиент " + (i + 1),
+        phone: "+1202555" + String(i).padStart(4, "0"),
+        customer_id: "customer-1",
+        channel_id: "channel-1",
+        state: "waiting_us",
+        updated_at: new Date(Date.now() - i * 3600000).toISOString(),
+        order_numbers: [],
+        unread_count: 1,
+        inbound_seq: 1,
+        last_message: i % 4 ? "Уточните статус заказа." : "",
+        last_has_attachment: i % 4 === 0,
+        has_ai_draft: i % 3 === 0,
+        needs_human: i % 9 === 0,
+      }));
+      const profile = {
+        id: "customer-1",
+        name: "Демонстрационный клиент",
+        display_name: "Демонстрационный клиент",
+        tags: [],
+        conversation_count: 1,
+        open_tasks: 0,
+        version: 1,
+        translation_client_language: "ar",
+        translation_manager_language: "en",
+        language: "ar",
+        translate_incoming: true,
+        translate_outgoing: true,
+      };
+      const msgs = [
+        {
+          id: "message-1",
+          direction: "in",
+          author_type: "client",
+          text: "hello",
+          kind: "text",
+          status: "inbound",
+          version: 1,
+          external: true,
+          created_at: new Date(Date.now() - 10000).toISOString(),
+        },
+        {
+          id: "message-2",
+          direction: "out",
+          author_type: "user",
+          author_name: "Менеджер",
+          text: "Спасибо! Проверим информацию по вашему заказу.",
+          kind: "text",
+          status: "delivered",
+          version: 1,
+          external: true,
+          created_at: new Date().toISOString(),
+        },
+      ];
+
+      window.WebSocket = class {
+        addEventListener() {}
+        close() {}
+        send() {}
+      };
+      const realFetch = window.fetch;
+      window.fetch = async (url, opts) => {
+        if (!String(url).includes("/api/") && !String(url).endsWith("/health"))
+          return realFetch(url, opts);
+        const u = new URL(url, location.origin),
+          p = u.pathname;
+        let d = [];
+        if (p === "/api/auth/me" || p === "/api/auth/refresh")
+          d = {
+            id: "user-test",
+            email: "demo@example.test",
+            role: "admin",
+            csrf_token: "test",
+            must_change_password: false,
+          };
+        else if (p === "/api/conversations/counts")
+          d = {
+            all: 142,
+            waiting_us: 142,
+            mine: 0,
+            human: 16,
+            ai_draft: 48,
+            closed: 0,
+          };
+        else if (p === "/api/conversations")
+          d = dialogs.slice(
+            Number(u.searchParams.get("offset") || 0),
+            Number(u.searchParams.get("offset") || 0) + 50,
+          );
+        else if (/\/conversations\/[^/]+$/.test(p))
+          d = dialogs.find((x) => p.endsWith(x.id)) || dialogs[0];
+        else if (p.endsWith("/messages")) d = msgs;
+        else if (p.endsWith("/customer"))
+          d = { status: "not_found", clients: [], stale: false, error: null };
+        else if (p.startsWith("/api/customers/")) d = profile;
+        else if (p.endsWith("/draft"))
+          d = { item: null, configured: true, enabled: true };
+        else if (p === "/api/channels")
+          d = [
+            {
+              channelId: "channel-1",
+              name: "WhatsApp",
+              transport: "whatsapp",
+              state: "active",
+            },
+          ];
+        else if (p === "/api/tasks") d = { items: [], total: 0 };
+        else if (p === "/api/notifications") d = { items: [], unread: 0 };
+        else if (p === "/api/integrations/health") d = { warnings: [] };
+        else if (p === "/api/me/notifications")
+          d = {
+            preferences: {
+              email: false,
+              telegram: false,
+              browser: false,
+              sound: false,
+            },
+            email: "demo@example.test",
+            telegram_linked: false,
+            smtp_configured: false,
+            telegram_configured: false,
+          };
+
+        if (p === "/health") d = { ok: true };
+        return new Response(JSON.stringify(d), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

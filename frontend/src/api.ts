@@ -39,6 +39,7 @@ export type Conversation = {
   order_numbers: string[];
   unread_count: number;
   last_message: string;
+  last_has_attachment?: boolean;
   last_status: string;
   task_updated: boolean;
   has_ai_draft?: boolean;

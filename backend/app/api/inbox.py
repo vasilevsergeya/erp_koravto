@@ -145,6 +145,7 @@ def describe_conversation(c, db, user_id=None):
         ),
         "last_message": ("Сообщение удалено" if last.deleted else last.body[:120]) if last else "",
         "last_status": last.status if last else "",
+        "last_has_attachment": bool(last and last.attachment_id and not last.deleted),
     }
 
 
