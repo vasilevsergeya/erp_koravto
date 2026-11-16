@@ -31,6 +31,7 @@ import { CustomerSidebar } from "./Customers";
 import { QuickReplyPicker } from "./QuickReplies";
 import { DraftPanel } from "./AI";
 import { taskLabel } from "./task-i18n";
+import { OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
 
 type Channel = {
   channelId: string;
@@ -41,7 +42,7 @@ type Channel = {
 type Member = { id: string; name: string; role: string };
 type OneCCustomer = {
   status: string;
-  clients: { name: string; realizations: string[] }[];
+  clients: OneCClient[];
   checked_at: string | null;
   stale: boolean;
   error: string | null;
@@ -468,23 +469,7 @@ export function Inbox({ user }: { user: User }) {
               </p>
             )}
             {onec.clients.map((client, index) => (
-              <div className="crm-onec-client" key={index}>
-                <b dir="auto">{client.name}</b>
-                <small>
-                  {t("orders")} · {client.realizations.length}
-                </small>
-                {client.realizations.length ? (
-                  <div className="crm-onec-orders">
-                    {client.realizations.map((number, i) => (
-                      <div className="crm-order" key={i}>
-                        <span>{number}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="crm-muted">{t("onecNoOrders")}</p>
-                )}
-              </div>
+              <OneCCustomerDetails key={index} client={client} compact />
             ))}
             {onec.stale && <p className="crm-onec-stale">{t("onecStale")}</p>}
             {onec.checked_at && (

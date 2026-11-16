@@ -1,7 +1,8 @@
-"""Contract from koravto-1c/docs/customer-phone-service.md (afbf86b)."""
+"""Customer phone contract, including optional order details added on 2026-11-16."""
 
 import asyncio
 import json
+import math
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -95,7 +96,37 @@ class OneCAdapter:
                 ):
                     raise ValueError
                 # Keep same-name clients and duplicate order numbers separate, as 1C does.
-                clients.append({"name": item["name"], "realizations": item["realizations"]})
+                customer = {"name": item["name"], "realizations": item["realizations"]}
+                if "country" in item:
+                    if not isinstance(item["country"], str):
+                        raise ValueError
+                    customer["country"] = item["country"]
+                if "orders" in item:
+                    orders = item["orders"]
+                    if not isinstance(orders, list) or len(orders) != len(item["realizations"]):
+                        raise ValueError
+                    details = []
+                    for number, order in zip(item["realizations"], orders, strict=True):
+                        if (
+                            not isinstance(order, dict)
+                            or order.get("number") != number
+                            or type(order.get("amount")) not in (int, float)
+                            or (
+                                isinstance(order["amount"], float)
+                                and not math.isfinite(order["amount"])
+                            )
+                            or not isinstance(order.get("shipping_number"), str)
+                            or not isinstance(order.get("project"), str)
+                        ):
+                            raise ValueError
+                        details.append(
+                            {
+                                key: order[key]
+                                for key in ("number", "amount", "shipping_number", "project")
+                            }
+                        )
+                    customer["orders"] = details
+                clients.append(customer)
             return clients
         except (ValueError, TypeError):
             raise OneCError("invalid_response") from None
