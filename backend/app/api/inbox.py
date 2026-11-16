@@ -10,6 +10,7 @@ from itsdangerous import BadSignature, SignatureExpired
 from pydantic import BaseModel, Field
 from sqlalchemy import Text, and_, case, cast, func, or_, select, text
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.auth import current_user
 from app.core.db import get_db
@@ -695,9 +696,16 @@ def retry(message_id: str, body: RetryInput, user=Depends(writer), db: Session =
 @router.get("/channels")
 async def channels(user=Depends(current_user), db: Session = Depends(get_db)):
     try:
-        return await WazzupAdapter(get_setting(db, "wazzup.api_key", "")).list_channels()
+        client = await run_in_threadpool(channels_adapter, db)
+        return await client.list_channels()
     except IntegrationError as e:
         raise HTTPException(502, "Wazzup: " + e.code) from None
+
+
+def channels_adapter(db: Session):
+    key = get_setting(db, "wazzup.api_key", "")
+    db.commit()  # Release the DB slot before waiting on the external provider.
+    return WazzupAdapter(key)
 
 
 @router.get("/team")
