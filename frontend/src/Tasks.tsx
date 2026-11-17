@@ -792,17 +792,19 @@ export function ConversationTasks({
   });
   return (
     <section className="conversation-tasks">
-      <h4>
-        {t("tasks")} <Badge size="sm">{tasks.data?.total || 0}</Badge>
-      </h4>
-      <Button
-        variant="light"
-        size="xs"
-        leftSection={<Plus size={14} />}
-        onClick={() => createTask(conversation)}
-      >
-        {t("createLinked")}
-      </Button>
+      <div className="crm-detail-heading">
+        <span>
+          {t("tasks")}: {tasks.isLoading ? "…" : tasks.data?.total || "нет"}
+        </span>
+        <Button
+          variant="light"
+          size="xs"
+          leftSection={<Plus size={14} />}
+          onClick={() => createTask(conversation)}
+        >
+          Создать
+        </Button>
+      </div>
       {tasks.error && <Alert color="red">{errorText(tasks.error)}</Alert>}
       {tasks.data?.items.map((task) => (
         <button
@@ -834,9 +836,13 @@ export function NotificationBell() {
       ),
     refetchInterval: 15000,
   });
-  async function read(ids: string[]) {
+  async function read(ids?: string[]) {
     try {
-      await api("/api/notifications/read", "POST", { ids });
+      await api(
+        ids ? "/api/notifications/read" : "/api/notifications/read-all",
+        "POST",
+        ids ? { ids } : {},
+      );
       void query.invalidateQueries({ queryKey: ["notifications"] });
     } catch (e) {
       setError(errorText(e));
@@ -850,7 +856,7 @@ export function NotificationBell() {
         onClick={() => setOpened(true)}
         aria-label={t("notifications")}
       >
-        {notices.data?.unread || 0}
+        {(notices.data?.unread || 0) > 99 ? "99+" : notices.data?.unread || 0}
       </Button>
       <Drawer
         position="right"
@@ -864,12 +870,8 @@ export function NotificationBell() {
           <Alert color="red">{error || errorText(notices.error)}</Alert>
         )}
         {!!notices.data?.items.length && (
-          <Button
-            variant="subtle"
-            size="xs"
-            onClick={() => void read(notices.data!.items.map((n) => n.id))}
-          >
-            {t("markRead")}
+          <Button variant="subtle" size="xs" onClick={() => void read()}>
+            Прочитать все
           </Button>
         )}
         {!notices.data?.items.length && <p>{t("noNotifications")}</p>}

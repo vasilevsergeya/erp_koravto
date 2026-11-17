@@ -16,6 +16,7 @@ import {
   Badge,
   Loader,
   Select,
+  Popover,
 } from "@mantine/core";
 import { useTranslation } from "react-i18next";
 import {
@@ -32,6 +33,8 @@ import {
   KeyRound,
   Bell,
   Sparkles,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import "@mantine/core/styles.css";
 import "./i18n";
@@ -50,13 +53,26 @@ import {
   PersonalNotifications,
   NotificationEvents,
 } from "./Notifications";
-import { api, ApiError, refreshSession, SessionExpiredError, setCsrf, setSession, type User, type Setting } from "./api";
+import "./dialogs-compact.css";
+import {
+  api,
+  ApiError,
+  refreshSession,
+  SessionExpiredError,
+  setCsrf,
+  setSession,
+  type User,
+  type Setting,
+} from "./api";
 
 const client = new QueryClient({
-  defaultOptions: { queries: {
-    retry: (count, error) => !(error instanceof ApiError && error.status === 401) && count < 1,
-    refetchOnWindowFocus: true,
-  } },
+  defaultOptions: {
+    queries: {
+      retry: (count, error) =>
+        !(error instanceof ApiError && error.status === 401) && count < 1,
+      refetchOnWindowFocus: true,
+    },
+  },
 });
 const stamp = (value: string | null) =>
   value
@@ -547,6 +563,20 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         ? "boards"
         : "inbox",
   );
+  const integration = useQuery({
+    queryKey: ["integration-health"],
+    queryFn: () =>
+      api<{ warnings: { code: string; text: string }[] }>(
+        "/api/integrations/health",
+      ),
+    enabled: user.role === "admin",
+    refetchInterval: 60000,
+    retry: false,
+  });
+  const warnings =
+    integration.data?.warnings.filter(
+      (w) => !["webhook_silent", "subscription_repaired"].includes(w.code),
+    ) || [];
   const query = useQueryClient();
   const health = useQuery({
     queryKey: ["health"],
@@ -628,8 +658,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       socket.onclose = async () => {
         if (disposed) return;
         // Includes a rejected upgrade (1006) as well as an expired live socket (1008).
-        try { await refreshSession(); }
-        catch (error) { if (error instanceof SessionExpiredError) return; }
+        try {
+          await refreshSession();
+        } catch (error) {
+          if (error instanceof SessionExpiredError) return;
+        }
         if (!disposed) {
           timer = setTimeout(connect, delay);
           delay = Math.min(delay * 2, 30000);
@@ -648,19 +681,34 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     let lastRefresh = 0;
     let renewing = false;
     const tick = () => {
-      if (document.visibilityState !== "visible" || renewing ||
-          Date.now() - lastActivity > 15 * 60_000 || Date.now() - lastRefresh < 5 * 60_000) return;
+      if (
+        document.visibilityState !== "visible" ||
+        renewing ||
+        Date.now() - lastActivity > 15 * 60_000 ||
+        Date.now() - lastRefresh < 5 * 60_000
+      )
+        return;
       renewing = true;
       lastRefresh = Date.now();
-      void refreshSession().catch(() => {
-        // Temporary connectivity errors do not log the manager out.
-        lastRefresh = Date.now() - 4 * 60_000;
-      }).finally(() => { renewing = false; });
+      void refreshSession()
+        .catch(() => {
+          // Temporary connectivity errors do not log the manager out.
+          lastRefresh = Date.now() - 4 * 60_000;
+        })
+        .finally(() => {
+          renewing = false;
+        });
     };
-    const activity = () => { lastActivity = Date.now(); tick(); };
-    const visible = () => { if (document.visibilityState === "visible") activity(); };
+    const activity = () => {
+      lastActivity = Date.now();
+      tick();
+    };
+    const visible = () => {
+      if (document.visibilityState === "visible") activity();
+    };
     const events = ["pointerdown", "keydown", "wheel", "touchstart"];
-    for (const event of events) window.addEventListener(event, activity, { passive: true });
+    for (const event of events)
+      window.addEventListener(event, activity, { passive: true });
     document.addEventListener("visibilitychange", visible);
     const timer = setInterval(tick, 60_000);
     tick();
@@ -692,6 +740,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       window.removeEventListener("popstate", pop);
     };
   }, []);
+  const [navCollapsed, setNavCollapsed] = useState(
+    () => localStorage.getItem(`crm-navigation:${user.id}`) === "collapsed",
+  );
   const pages = [
     { id: "inbox", icon: MessageSquare },
     { id: "boards", icon: LayoutDashboard },
@@ -709,14 +760,41 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       : []),
   ];
   return (
-    <div className="workspace">
+    <div
+      className={
+        "workspace " +
+        (page === "inbox" ? "workspace-inbox " : "") +
+        (navCollapsed ? "navigation-collapsed" : "")
+      }
+    >
       <aside className="sidebar">
         <Brand />
+        <button
+          className="nav-collapse"
+          title={navCollapsed ? "Развернуть меню" : "Свернуть меню"}
+          aria-label={navCollapsed ? "Развернуть меню" : "Свернуть меню"}
+          onClick={() => {
+            const next = !navCollapsed;
+            setNavCollapsed(next);
+            localStorage.setItem(
+              `crm-navigation:${user.id}`,
+              next ? "collapsed" : "expanded",
+            );
+          }}
+        >
+          {navCollapsed ? (
+            <PanelLeftOpen size={18} />
+          ) : (
+            <PanelLeftClose size={18} />
+          )}
+        </button>
         <div className="nav-label">{t("workspace")}</div>
         <nav>
           {pages.map((p) => (
             <button
               key={p.id}
+              title={t(p.id)}
+              aria-label={t(p.id)}
               className={page === p.id ? "active" : ""}
               onClick={() => {
                 history.pushState(
@@ -728,7 +806,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               }}
             >
               <p.icon size={19} />
-              {t(p.id)}
+              <span className="nav-text">{t(p.id)}</span>
               {page === p.id && <ChevronRight size={16} />}
             </button>
           ))}
@@ -751,34 +829,60 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       </aside>
       <main className="main">
         <header className="topbar">
-          <span className="eyebrow dark">{t("version")}</span>
+          <span className="timezone">
+            SEOUL ·{" "}
+            {new Intl.DateTimeFormat("ru", {
+              timeZone: "Asia/Seoul",
+              hour: "2-digit",
+              minute: "2-digit",
+            }).format(new Date())}
+          </span>
           <NotificationBell />
-          <div className={"health " + (health.data?.ok ? "healthy" : "")}>
-            <i />
-            {t(
-              health.isLoading
-                ? "checking"
-                : health.data?.ok
-                  ? "connected"
-                  : "degraded",
-            )}
-          </div>
+          <Popover position="bottom-end" width={320} withinPortal shadow="md">
+            <Popover.Target>
+              <button
+                className={
+                  "health " +
+                  (warnings.length
+                    ? "warning"
+                    : health.data?.ok
+                      ? "healthy"
+                      : "")
+                }
+              >
+                <i />
+                {warnings.length
+                  ? warnings.some((w) => w.code === "backlog")
+                    ? "Очередь задерживается"
+                    : "Требуется внимание"
+                  : t(
+                      health.isLoading
+                        ? "checking"
+                        : health.data?.ok
+                          ? "connected"
+                          : "degraded",
+                    )}
+              </button>
+            </Popover.Target>
+            <Popover.Dropdown>
+              {warnings.length ? (
+                warnings.map((w) => <p key={w.code}>{w.text}</p>)
+              ) : (
+                <small>
+                  {health.data?.ok
+                    ? "Система работает"
+                    : "Проверяем соединение"}
+                </small>
+              )}
+            </Popover.Dropdown>
+          </Popover>
         </header>
         <div className="page-body">
-          <div className="page-heading">
-            <div>
+          {page !== "inbox" && (
+            <div className="page-heading">
               <h1>{t(page)}</h1>
-              <p>{t(page + "Hint")}</p>
             </div>
-            <span className="timezone">
-              SEOUL ·{" "}
-              {new Intl.DateTimeFormat("ru", {
-                timeZone: "Asia/Seoul",
-                hour: "2-digit",
-                minute: "2-digit",
-              }).format(new Date())}
-            </span>
-          </div>
+          )}
           {page === "inbox" ? (
             <Inbox user={user} />
           ) : page === "boards" ? (
@@ -817,7 +921,10 @@ function App() {
   useEffect(() => {
     const expired = () => {
       // Unmount all query error panels before their rejected promises can render.
-      flushSync(() => { userSet(null); setSessionEnded(true); });
+      flushSync(() => {
+        userSet(null);
+        setSessionEnded(true);
+      });
       void client.cancelQueries();
       client.clear();
     };
@@ -872,12 +979,17 @@ function App() {
       </div>
     );
   if (!user || user.must_change_password)
-    return <>
-      {sessionEnded && <Alert color="orange" role="status">
-        Сессия завершена. Войдите снова — открытый диалог и текст ответа сохранены.
-      </Alert>}
-      <Auth user={user} onUser={update} />
-    </>;
+    return (
+      <>
+        {sessionEnded && (
+          <Alert color="orange" role="status">
+            Сессия завершена. Войдите снова — открытый диалог и текст ответа
+            сохранены.
+          </Alert>
+        )}
+        <Auth user={user} onUser={update} />
+      </>
+    );
   return <Workspace user={user} onLogout={() => void logout()} />;
 }
 

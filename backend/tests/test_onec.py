@@ -208,7 +208,13 @@ class OneCAcceptance(unittest.TestCase):
             "app.services.onec_customers.OneCAdapter.customers", new_callable=AsyncMock
         )
         self.mock = self.lookup.start()
-        self.mock.return_value = [{"name": "Test Customer", "realizations": ["#TEST-42", "000001"]}]
+        self.mock.return_value = [
+            {
+                "name": "Test Customer",
+                "matched_phone": "+12025550123",
+                "realizations": ["#TEST-42", "000001"],
+            }
+        ]
 
     def tearDown(self):
         self.lookup.stop()
@@ -261,8 +267,8 @@ class OneCAcceptance(unittest.TestCase):
 
     def test_multiple_candidates_never_overwrite_chat_identity(self):
         self.mock.return_value = [
-            {"name": "Same", "realizations": ["A", "A"]},
-            {"name": "Same", "realizations": ["B"]},
+            {"name": "Same", "matched_phone": "+12025550123", "realizations": ["A", "A"]},
+            {"name": "Same", "matched_phone": "+12025550123", "realizations": ["B"]},
         ]
         result = self.client.get("/api/conversations/" + self.cid + "/customer").json()
         self.assertEqual(result["status"], "multiple")
@@ -282,6 +288,7 @@ class OneCAcceptance(unittest.TestCase):
         self.assertIsNone(result["checked_at"])
         self.assertEqual(self.mock.await_count, 2)
         self.mock.side_effect = None
+        self.mock.return_value[0]["matched_phone"] = "+12025550124"
         with SessionLocal() as db:
             put_setting(db, "onec.username", "another-user", False, self.user)
             db.commit()
@@ -349,7 +356,13 @@ class OneCAcceptance(unittest.TestCase):
                 peak = max(peak, running)
             try:
                 await asyncio.sleep(0.15)
-                return [{"name": "Synthetic customer", "realizations": []}]
+                return [
+                    {
+                        "name": "Synthetic customer",
+                        "matched_phone": "+12025550123",
+                        "realizations": [],
+                    }
+                ]
             finally:
                 with guard:
                     running -= 1

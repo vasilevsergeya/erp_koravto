@@ -1,6 +1,10 @@
+import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import {
   Alert,
+  ActionIcon,
+  Menu,
+  Popover,
   Button,
   Checkbox,
   Modal,
@@ -35,6 +39,14 @@ export const languages = [
   ["nl", "Nederlands"],
 ].map(([value, label]) => ({ value, label }));
 
+export function languageName(code: string): string {
+  try {
+    return new Intl.DisplayNames(["ru"], { type: "language" }).of(code) || code;
+  } catch {
+    return code;
+  }
+}
+
 export function LinkedText({ text }: { text: string }) {
   const parts = text.split(/((?:https?:\/\/|www\.)[^\s<>]+)/giu);
   return (
@@ -68,6 +80,9 @@ export function TranslationFields({
   value,
   onChange,
   disabled = false,
+  managerLanguage,
+  onManagerChange,
+  detectedLanguage,
 }: {
   value: Pick<
     CustomerLite,
@@ -78,6 +93,9 @@ export function TranslationFields({
   >;
   onChange: (fields: Partial<CustomerLite>) => void;
   disabled?: boolean;
+  managerLanguage?: string;
+  onManagerChange?: (language: string) => void;
+  detectedLanguage?: string;
 }) {
   return (
     <Stack gap="xs" className="crm-translation-fields">
@@ -98,25 +116,35 @@ export function TranslationFields({
         }
       />
       <Select
+        comboboxProps={{ withinPortal: false }}
         label="Язык клиента"
-        data={languages}
-        value={value.translation_client_language || "en"}
+        data={[
+          { value: "auto", label: "Определять автоматически" },
+          ...languages,
+        ]}
+        value={value.translation_client_language || "auto"}
         searchable
         disabled={disabled}
         onChange={(v) => v && onChange({ translation_client_language: v })}
       />
-      <Select
-        label="Язык менеджера"
-        data={languages}
-        value={value.translation_manager_language || "ru"}
-        searchable
-        disabled={disabled}
-        onChange={(v) => v && onChange({ translation_manager_language: v })}
-      />
-      <small>
-        Входящие: язык клиента → язык менеджера. Исходящие: язык менеджера →
-        язык клиента.
-      </small>
+      {value.translation_client_language === "auto" && (
+        <small>
+          Авто:{" "}
+          {detectedLanguage
+            ? languageName(detectedLanguage)
+            : "ещё не определён"}
+        </small>
+      )}
+      {onManagerChange && (
+        <Select
+          comboboxProps={{ withinPortal: false }}
+          label="Мой язык"
+          data={languages}
+          value={managerLanguage || "en"}
+          searchable
+          onChange={(value) => value && onManagerChange(value)}
+        />
+      )}
     </Stack>
   );
 }
@@ -140,8 +168,20 @@ export function TranslationPreferences({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const personal = useQuery({
+    queryKey: ["manager-language"],
+    queryFn: () => api<{ language: string }>("/api/me/language"),
+  });
+  const ownLanguage = personal.data?.language || "en";
   const value = customer.data;
-  const enabled = !!(value?.translate_incoming || value?.translate_outgoing);
+  const clientLanguage =
+    value?.translation_client_language === "auto"
+      ? value.language
+      : value?.translation_client_language;
+  const incoming = value?.incoming_translation_auto
+    ? !!clientLanguage && clientLanguage !== ownLanguage
+    : !!value?.translate_incoming;
+  const enabled = !!(incoming || value?.translate_outgoing);
   async function change(fields: Partial<CustomerLite>) {
     if (!value) return;
     setBusy(true);
@@ -166,25 +206,114 @@ export function TranslationPreferences({
       setBusy(false);
     }
   }
+  async function changePersonal(language: string) {
+    setError("");
+    try {
+      const updated = await api<{ language: string }>(
+        "/api/me/language",
+        "PUT",
+        { language },
+      );
+      query.setQueryData(["manager-language"], updated);
+      for (const key of [
+        "conversation",
+        "conversations",
+        "messages",
+        "ai-draft",
+      ])
+        void query.invalidateQueries({ queryKey: [key] });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
+  }
   return (
-    <section className="crm-translation-preferences">
-      <h3>Перевод диалога</h3>
-      {error && <Alert color="red">{error}</Alert>}
-      {value && (
-        <TranslationFields
-          value={value}
-          onChange={(fields) => void change(fields)}
-          disabled={!canWrite || busy}
+    <Popover position="bottom-end" width={300} withinPortal shadow="md">
+      <Popover.Target>
+        <Button
+          size="xs"
+          variant="subtle"
+          title="Входящие: язык клиента → язык менеджера. Исходящие: язык менеджера → язык клиента."
+        >
+          {enabled
+            ? `${clientLanguage ? languageName(clientLanguage) : "авто"} → ${languageName(ownLanguage)}`
+            : "Перевод: выкл"}
+        </Button>
+      </Popover.Target>
+      <Popover.Dropdown>
+        {error && <Alert color="red">{error}</Alert>}
+        {value && (
+          <TranslationFields
+            value={{ ...value, translate_incoming: incoming }}
+            managerLanguage={ownLanguage}
+            onManagerChange={(language) => void changePersonal(language)}
+            detectedLanguage={value.language}
+            onChange={(fields) => void change(fields)}
+            disabled={!canWrite || busy}
+          />
+        )}
+        <Checkbox
+          mt="sm"
+          label="Показать на языке оригинала"
+          checked={!enabled || original}
+          disabled={!enabled}
+          onChange={(e) => onOriginal(e.currentTarget.checked)}
         />
-      )}
-      <Checkbox
-        mt="sm"
-        label="Показать на языке оригинала"
-        checked={!enabled || original}
-        disabled={!enabled}
-        onChange={(e) => onOriginal(e.currentTarget.checked)}
-      />
-    </section>
+      </Popover.Dropdown>
+    </Popover>
+  );
+}
+
+export function SendLanguageMenu({
+  value,
+  onChange,
+  managerLanguage,
+  clientLanguage,
+  disabled = false,
+}: {
+  value: string | null;
+  onChange: (language: string | null) => void;
+  managerLanguage: string;
+  clientLanguage?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <Menu withinPortal={false} position="top-end">
+      <Menu.Target>
+        <ActionIcon
+          variant="light"
+          disabled={disabled}
+          title="Язык одной отправки"
+          aria-label="Язык отправки"
+        >
+          <ChevronDown size={14} />
+        </ActionIcon>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Item
+          color={!value ? "teal" : undefined}
+          onClick={() => onChange(null)}
+        >
+          По умолчанию
+          {clientLanguage ? " · " + languageName(clientLanguage) : ""}
+        </Menu.Item>
+        <Menu.Item
+          color={value === "original" ? "teal" : undefined}
+          onClick={() => onChange("original")}
+        >
+          На языке менеджера, без перевода · {languageName(managerLanguage)}
+        </Menu.Item>
+        <Menu.Divider />
+        {languages.map((language) => (
+          <Menu.Item
+            key={language.value}
+            color={value === language.value ? "teal" : undefined}
+            onClick={() => onChange(language.value)}
+          >
+            {languageName(language.value)}
+          </Menu.Item>
+        ))}
+      </Menu.Dropdown>
+    </Menu>
   );
 }
 
@@ -192,15 +321,20 @@ export function MessageActions({
   message: m,
   user,
   onChanged,
+  onReply,
 }: {
   message: Message;
   user: User;
   onChanged: () => void;
+  onReply: () => void;
 }) {
   const [edit, setEdit] = useState(false),
     [text, setText] = useState("");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [confirmAction, setConfirmAction] = useState<"hide" | "delete" | null>(
+    null,
+  );
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
   const owned = m.author_id === user.id || user.role === "admin";
   const active =
@@ -215,24 +349,6 @@ export function MessageActions({
     (m.is_private_note || m.external || unsent || m.status === "error");
   async function change(action: "edit" | "delete" | "hide") {
     if (busy) return;
-    if (
-      action === "delete" &&
-      !window.confirm(
-        m.is_private_note
-          ? "Удалить внутреннюю заметку?"
-          : unsent
-            ? "Отменить отправку сообщения?"
-            : "Удалить сообщение у себя и у клиента?",
-      )
-    )
-      return;
-    if (
-      action === "hide" &&
-      !window.confirm(
-        "Скрыть сообщение только для вас? У клиента и других сотрудников оно останется.",
-      )
-    )
-      return;
     setBusy(true);
     setError("");
     try {
@@ -243,6 +359,7 @@ export function MessageActions({
         text: action === "edit" ? text : "",
       });
       setEdit(false);
+      setConfirmAction(null);
       setOperationId(crypto.randomUUID());
       onChanged();
     } catch (e) {
@@ -268,32 +385,101 @@ export function MessageActions({
   }
   return (
     <>
-      <div className="crm-message-tools">
-        {writable && !m.attachment_url && !active && (
-          <button
-            disabled={busy}
-            onClick={() => {
-              setText(m.text);
-              setOperationId(crypto.randomUUID());
-              setEdit(true);
-            }}
+      <Menu withinPortal position="bottom-end">
+        <Menu.Target>
+          <ActionIcon
+            size={14}
+            variant="subtle"
+            className="crm-message-menu"
+            aria-label="Действия с сообщением"
+            title="Действия с сообщением"
           >
-            Редактировать
-          </button>
-        )}
-        {writable && !active && (
-          <button disabled={busy} onClick={() => void change("delete")}>
-            {m.is_private_note
-              ? "Удалить заметку"
+            <ChevronDown size={12} />
+          </ActionIcon>
+        </Menu.Target>
+        <Menu.Dropdown>
+          {!m.is_private_note &&
+            !m.deleted &&
+            m.external &&
+            m.author_type !== "system" && (
+              <Menu.Item onClick={onReply}>Ответить</Menu.Item>
+            )}
+          <Menu.Item
+            disabled={!m.text}
+            onClick={() =>
+              void navigator.clipboard
+                .writeText(
+                  m.direction === "out" ? (m.delivery_text ?? m.text) : m.text,
+                )
+                .catch(() => setError("Не удалось скопировать текст"))
+            }
+          >
+            Скопировать текст
+          </Menu.Item>
+          {writable && !m.attachment_url && !active && (
+            <Menu.Item
+              disabled={busy}
+              onClick={() => {
+                setText(m.text);
+                setOperationId(crypto.randomUUID());
+                setEdit(true);
+              }}
+            >
+              Редактировать
+            </Menu.Item>
+          )}
+          {writable && !active && (
+            <Menu.Item
+              disabled={busy}
+              color="red"
+              onClick={() => setConfirmAction("delete")}
+            >
+              {m.is_private_note
+                ? "Удалить заметку"
+                : unsent
+                  ? "Отменить отправку"
+                  : "Удалить у всех"}
+            </Menu.Item>
+          )}
+          <Menu.Item disabled={busy} onClick={() => setConfirmAction("hide")}>
+            Удалить у себя
+          </Menu.Item>
+        </Menu.Dropdown>
+      </Menu>
+      <Modal
+        opened={confirmAction !== null}
+        onClose={() => !busy && setConfirmAction(null)}
+        title={
+          confirmAction === "hide" ? "Удалить у себя?" : "Удалить сообщение?"
+        }
+        centered
+      >
+        <p>
+          {confirmAction === "hide"
+            ? "Сообщение останется у клиента и других сотрудников."
+            : m.is_private_note
+              ? "Внутренняя заметка будет удалена."
               : unsent
-                ? "Отменить отправку"
-                : "Удалить у всех"}
-          </button>
-        )}
-        <button disabled={busy} onClick={() => void change("hide")}>
-          Удалить у себя
-        </button>
-      </div>
+                ? "Отправка будет отменена."
+                : "Сообщение будет удалено у вас и у клиента."}
+        </p>
+        {error && <Alert color="red">{error}</Alert>}
+        <Button
+          color="red"
+          loading={busy}
+          onClick={() => confirmAction && void change(confirmAction)}
+        >
+          Удалить
+        </Button>
+        <Button
+          ml="sm"
+          variant="default"
+          disabled={busy}
+          onClick={() => setConfirmAction(null)}
+        >
+          Отмена
+        </Button>
+      </Modal>
       {m.action && ["queued", "processing"].includes(m.action.state) && (
         <small>Изменение выполняется…</small>
       )}

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -7,6 +7,7 @@ import {
   Checkbox,
   Loader,
   NumberInput,
+  Popover,
   Select,
   Table,
   TagsInput,
@@ -17,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import "./v1-i18n";
 import { api } from "./api";
 import "./ai.css";
+import { SendLanguageMenu, languageName } from "./MessageTools";
 
 const fail = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const intents: Record<string, string> = {
@@ -62,6 +64,8 @@ const reasons: Record<string, string> = {
   message_changed: "Входящее изменилось",
   timeout: "Превышено время ожидания",
   interrupted: "Задание прервано",
+  greeting_name_mismatch: "Обращение по чужому имени убрано; проверьте ответ",
+  manager_translation_failed: "Перевод для менеджера недоступен",
   generation_failed: "Не удалось подготовить ответ",
   policy_or_message_changed: "Условия отправки изменились",
 };
@@ -73,6 +77,8 @@ type Draft = {
   language: string;
   body: string;
   final_text: string;
+  manager_text: string | null;
+  manager_language: string;
   reason: string;
   policy: { passed?: boolean; reasons?: string[] };
   auto_at: string | null;
@@ -91,12 +97,56 @@ function refresh(query: ReturnType<typeof useQueryClient>) {
     void query.invalidateQueries({ queryKey: [key] });
 }
 
+function sourceSummary(name: string, result: unknown): string {
+  const value =
+    result && typeof result === "object"
+      ? (result as Record<string, unknown>)
+      : {};
+  const labels: Record<string, string> = {
+    get_stock: "Остатки",
+    get_orders: "Заказы клиента",
+    get_order: "Заказ",
+    get_customer_context: "Данные клиента",
+    quote_price: "Расчёт цены",
+    search_examples: "Примеры ответов",
+    get_policies: "Правила компании",
+  };
+  const label = labels[name] || "Источник";
+  if (value.status === "source_not_connected") {
+    const numbers = Array.isArray(value.known_order_numbers)
+      ? value.known_order_numbers.filter(
+          (v): v is string => typeof v === "string",
+        )
+      : [];
+    return name === "get_stock"
+      ? "Остатки: источник 1С не подключён"
+      : numbers.length
+        ? `${label}: известны номера ${numbers.join(", ")}; подробности недоступны`
+        : `${label}: не найдены; источник подробностей не подключён`;
+  }
+  if (value.status === "ok") return `${label}: данные получены`;
+  return `${label}: данные недоступны`;
+}
+
 export function DraftPanel({
   conversationId,
   canWrite,
+  isAdmin = false,
+  managerLanguage,
+  clientLanguage,
+  onEdit,
 }: {
   conversationId: string;
   canWrite: boolean;
+  isAdmin?: boolean;
+  managerLanguage: string;
+  clientLanguage?: string;
+  onEdit: (
+    id: string,
+    text: string,
+    source: string,
+    target: string | null,
+  ) => void;
 }) {
   const { t } = useTranslation("v1");
   const query = useQueryClient();
@@ -108,216 +158,331 @@ export function DraftPanel({
       ),
     refetchInterval: 4000,
   });
-  const [editing, setEditing] = useState<string | null>(null),
-    [answer, setAnswer] = useState(""),
-    [reason, setReason] = useState(""),
-    [category, setCategory] = useState<string | null>(null),
-    [rejecting, setRejecting] = useState(false),
+  const [opened, setOpened] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  const d = data.data?.item;
+  const [rejecting, setRejecting] = useState(false),
+    [category, setCategory] = useState<string | null>(null),
+    [reason, setReason] = useState("");
+  const [sendLanguage, setSendLanguage] = useState<string | null>(null),
+    [clientExpanded, setClientExpanded] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const outside = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !panelRef.current?.contains(event.target)
+      )
+        setOpened(false);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.altKey && event.code === "KeyA") {
+        event.preventDefault();
+        setOpened((value) => !value);
+      } else if (event.key === "Escape") setOpened(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    window.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      window.removeEventListener("keydown", key);
+    };
+  }, []);
+  const d = data.data?.item,
+    pending = d?.decision === "pending";
+  const readable = !!d?.manager_text && d.manager_language === managerLanguage;
+  const target =
+    sendLanguage === "original"
+      ? managerLanguage
+      : sendLanguage || clientLanguage || d?.language || "";
+  const state = data.isLoading
+    ? "Готовится…"
+    : !pending
+      ? "Черновика нет"
+      : states[d.state] || d.state;
+  const warnings = [
+    ...new Set(
+      [...(d?.policy.reasons || []), d?.reason || ""]
+        .filter(Boolean)
+        .map((value) => reasons[value] || value),
+    ),
+  ];
   async function act(path: string, body?: unknown) {
     setBusy(true);
     setError("");
     try {
       await api(path, "POST", body);
       refresh(query);
+      if (/\/(send|send-edited|reject)$/.test(path)) {
+        setOpened(false);
+        setSendLanguage(null);
+      }
       return true;
-    } catch (e) {
-      setError(fail(e));
+    } catch (error) {
+      setError(fail(error));
       return false;
     } finally {
       setBusy(false);
     }
   }
-  if (data.isLoading) return null;
+  const regenerate = () =>
+    void act("/api/conversations/" + conversationId + "/draft/regenerate");
   return (
-    <section className="ai-draft" aria-label="AI-черновик">
-      <div className="ai-heading">
+    <section
+      ref={panelRef}
+      className="ai-draft ai-draft-compact"
+      aria-label="AI-черновик"
+    >
+      <button
+        className="ai-draft-toggle"
+        type="button"
+        aria-expanded={opened}
+        aria-controls={"ai-panel-" + conversationId}
+        title="AI-помощник · Alt+A"
+        onClick={() => setOpened(!opened)}
+      >
         <b>AI-помощник</b>
-        <Badge variant="light">
-          {d
-            ? states[d.state] || d.state
-            : data.data?.configured
-              ? "Нет черновика"
-              : "Ключ OpenAI не настроен"}
-        </Badge>
-        {d && (
-          <small>
-            {intents[d.intent]} · {d.language} · {decisions[d.decision]}
-          </small>
+        <span className={"ai-line-state " + (pending ? d.state : "empty")}>
+          {state}
+        </span>
+        <span className="ai-line-preview" dir="auto">
+          {pending
+            ? readable
+              ? d.manager_text
+              : "Перевод для менеджера готовится…"
+            : ""}
+        </span>
+        {!pending && canWrite && data.data?.configured && data.data.enabled && (
+          <span className="ai-prepare-hint">Подготовить</span>
         )}
-      </div>
-      {(error || data.error) && (
-        <Alert color="red">{error || fail(data.error)}</Alert>
-      )}
-      {d?.auto_at && d.decision === "pending" && (
-        <Alert color="orange">
-          Автоответ ожидает отправки. Нажмите «Изменить», чтобы остановить его и
-          проверить текст.
-        </Alert>
-      )}
-      {d?.body && (
-        <details open={d.decision === "pending"}>
-          <summary>Текст и проверка</summary>
-          <div className="ai-draft-body" dir="auto">
-            {d.body}
-          </div>
-          {d.policy.reasons?.map((r) => (
-            <small className="ai-warning" key={r}>
-              {reasons[r] || r}
-            </small>
-          ))}
-          {d.reason && (
-            <small className="ai-warning">
-              {reasons[d.reason] || d.reason}
-            </small>
-          )}
-        </details>
-      )}
-      {!!d?.tool_calls.length && (
-        <details>
-          <summary>{t("sources")}</summary>
-          {d.tool_calls.map((call, i) => (
-            <div key={i}>
-              <b>{call.name}</b>
-              <pre
-                style={{
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                  fontSize: 12,
-                }}
-              >
-                {JSON.stringify(call.result, null, 2)}
-              </pre>
-            </div>
-          ))}
-        </details>
-      )}
-      {canWrite &&
-        d &&
-        d.decision === "pending" &&
-        ["ready", "escalated"].includes(d.state) && (
-          <>
-            <div className="ai-actions">
-              <Button
-                size="xs"
-                loading={busy}
-                onClick={() => void act("/api/drafts/" + d.id + "/send", {})}
-              >
-                Отправить как есть
-              </Button>
-              <Button
-                size="xs"
-                variant="light"
-                disabled={busy}
-                onClick={async () => {
-                  if (await act("/api/drafts/" + d.id + "/pause")) {
-                    setEditing(d.id);
-                    setAnswer(d.body);
-                  }
-                }}
-              >
-                Изменить
-              </Button>
-              <Button
-                size="xs"
-                variant="subtle"
-                color="gray"
-                onClick={async () => {
-                  if (await act("/api/drafts/" + d.id + "/pause"))
-                    setRejecting(true);
-                }}
-              >
-                Отклонить
-              </Button>
-            </div>
-            {editing === d.id && (
-              <div className="ai-edit">
-                <Textarea
-                  label="Правка AI-ответа"
-                  value={answer}
-                  onChange={(e) => setAnswer(e.currentTarget.value)}
-                  autosize
-                  minRows={3}
-                  maxRows={8}
-                  maxLength={10000}
-                />
-                <Button
-                  size="xs"
-                  loading={busy}
-                  onClick={async () => {
-                    if (
-                      await act("/api/drafts/" + d.id + "/send-edited", {
-                        final_text: answer,
-                      })
-                    )
-                      setEditing(null);
-                  }}
-                >
-                  Отправить с правкой
-                </Button>
-                <Button
-                  size="xs"
-                  variant="subtle"
-                  onClick={() => setEditing(null)}
-                >
-                  Закрыть
-                </Button>
-              </div>
+      </button>
+      {opened && (
+        <div
+          id={"ai-panel-" + conversationId}
+          className="ai-draft-panel"
+          role="region"
+          aria-label="Панель AI-помощника"
+        >
+          <div className="ai-heading">
+            <b>AI-помощник</b>
+            <Badge variant="light">{state}</Badge>
+            {d && (
+              <small>
+                {intents[d.intent]} · {languageName(d.language || "en")}
+              </small>
             )}
-            {rejecting && (
-              <div className="ai-edit">
-                <Select
-                  label={t("rejectReason")}
-                  value={category}
-                  onChange={setCategory}
-                  data={["incorrect", "irrelevant", "tone", "other"].map(
-                    (value) => ({ value, label: t(value) }),
-                  )}
-                />
-                <TextInput
-                  label={t("comment")}
-                  value={reason}
-                  onChange={(e) => setReason(e.currentTarget.value)}
-                />
+          </div>
+          {(error || data.error) && (
+            <Alert color="red">{error || fail(data.error)}</Alert>
+          )}
+          {d?.auto_at && pending && (
+            <Alert color="orange">
+              Автоответ ожидает отправки. «Изменить» останавливает
+              автоматическую отправку.
+            </Alert>
+          )}
+          {d?.body && pending && (
+            <>
+              {warnings.map((label) => (
+                <small className="ai-warning" key={label}>
+                  {label}
+                </small>
+              ))}
+              {readable ? (
+                <div className="ai-draft-body" dir="auto">
+                  {d.manager_text}
+                </div>
+              ) : (
+                <Alert color="orange">
+                  Не удалось получить версию на вашем языке. Черновик не
+                  отправлен.{" "}
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    disabled={busy}
+                    onClick={() =>
+                      void act("/api/drafts/" + d.id + "/reading/retry")
+                    }
+                  >
+                    Повторить перевод
+                  </Button>
+                </Alert>
+              )}
+              {d.language !== managerLanguage && (
+                <div className="ai-client-version">
+                  <button
+                    type="button"
+                    aria-expanded={clientExpanded}
+                    onClick={() => setClientExpanded(!clientExpanded)}
+                  >
+                    Клиенту · {languageName(d.language)}{" "}
+                    {clientExpanded ? "▴" : "▾"}
+                  </button>
+                  <p dir="auto" className={clientExpanded ? "" : "is-clamped"}>
+                    {d.body}
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+          {canWrite &&
+            d &&
+            pending &&
+            ["ready", "escalated"].includes(d.state) && (
+              <div className="ai-actions">
+                <div className="crm-send-group">
+                  <Button
+                    size="xs"
+                    loading={busy}
+                    disabled={!readable || !target}
+                    title={"Отправить · " + languageName(target || "en")}
+                    onClick={() =>
+                      void act("/api/drafts/" + d.id + "/send", {
+                        source_language: managerLanguage,
+                        target_language: sendLanguage || target,
+                      })
+                    }
+                  >
+                    Отправить · {languageName(target || "en")}
+                  </Button>
+                  <SendLanguageMenu
+                    value={sendLanguage}
+                    onChange={setSendLanguage}
+                    managerLanguage={managerLanguage}
+                    clientLanguage={clientLanguage || d.language}
+                    disabled={busy}
+                  />
+                </div>
                 <Button
                   size="xs"
-                  disabled={
-                    !category || (category === "other" && !reason.trim())
-                  }
-                  loading={busy}
+                  variant="light"
+                  disabled={busy || !readable}
                   onClick={async () => {
-                    if (
-                      await act("/api/drafts/" + d.id + "/reject", {
-                        reason,
-                        category,
-                      })
-                    ) {
-                      setRejecting(false);
-                      setReason("");
+                    if (await act("/api/drafts/" + d.id + "/pause")) {
+                      onEdit(
+                        d.id,
+                        d.manager_text!,
+                        d.manager_language,
+                        sendLanguage,
+                      );
+                      setOpened(false);
                     }
                   }}
                 >
-                  Подтвердить отклонение
+                  Изменить
+                </Button>
+                <Popover
+                  opened={rejecting}
+                  onChange={setRejecting}
+                  withinPortal={false}
+                  position="top"
+                  width={260}
+                >
+                  <Popover.Target>
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      color="gray"
+                      disabled={busy}
+                      onClick={async () => {
+                        if (await act("/api/drafts/" + d.id + "/pause"))
+                          setRejecting(!rejecting);
+                      }}
+                    >
+                      Отклонить
+                    </Button>
+                  </Popover.Target>
+                  <Popover.Dropdown>
+                    <Select
+                      comboboxProps={{ withinPortal: false }}
+                      label={t("rejectReason")}
+                      value={category}
+                      onChange={setCategory}
+                      data={["incorrect", "irrelevant", "tone", "other"].map(
+                        (value) => ({ value, label: t(value) }),
+                      )}
+                    />
+                    <TextInput
+                      mt="xs"
+                      label={t("comment")}
+                      value={reason}
+                      onChange={(event) => setReason(event.currentTarget.value)}
+                      maxLength={1000}
+                    />
+                    <Button
+                      mt="xs"
+                      size="xs"
+                      loading={busy}
+                      disabled={
+                        !category || (category === "other" && !reason.trim())
+                      }
+                      onClick={async () => {
+                        if (
+                          await act("/api/drafts/" + d.id + "/reject", {
+                            category,
+                            reason,
+                          })
+                        ) {
+                          setRejecting(false);
+                          setReason("");
+                        }
+                      }}
+                    >
+                      Отклонить
+                    </Button>
+                  </Popover.Dropdown>
+                </Popover>
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  title="Подготовить заново"
+                  disabled={busy}
+                  onClick={regenerate}
+                >
+                  Заново
                 </Button>
               </div>
             )}
-          </>
-        )}
-      {canWrite && data.data?.configured && data.data.enabled && (
-        <Button
-          size="xs"
-          variant="subtle"
-          disabled={busy || d?.state === "generating" || d?.state === "queued"}
-          onClick={() =>
-            void act(
-              "/api/conversations/" + conversationId + "/draft/regenerate",
-            )
-          }
-        >
-          Подготовить заново
-        </Button>
+          {!!d?.tool_calls.length && (
+            <details>
+              <summary>{t("sources")}</summary>
+              {d.tool_calls.map((call, index) => (
+                <div key={index}>
+                  <p>{sourceSummary(call.name, call.result)}</p>
+                  {isAdmin && (
+                    <details>
+                      <summary>Подробности</summary>
+                      <pre
+                        style={{
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                          fontSize: 12,
+                        }}
+                      >
+                        {JSON.stringify(call.result, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+              ))}
+            </details>
+          )}
+          {canWrite &&
+            data.data?.configured &&
+            data.data.enabled &&
+            (!pending || !d?.body) && (
+              <Button
+                size="xs"
+                variant="subtle"
+                disabled={
+                  busy || d?.state === "generating" || d?.state === "queued"
+                }
+                onClick={regenerate}
+              >
+                Подготовить
+              </Button>
+            )}
+        </div>
       )}
     </section>
   );

@@ -1,10 +1,11 @@
-"""Persistent translations. An untranslated outgoing message never reaches the outbox."""
+"""Durable translations requested by a viewer, or by a legacy outgoing queue."""
 
 import asyncio
 import logging
 from datetime import timedelta
 
-from sqlalchemy import and_, case, or_, select
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 
 from app.core.db import SessionLocal
 from app.core.settings import get_setting
@@ -12,6 +13,7 @@ from app.integrations.openai import AIError, OpenAIAdapter, output_json
 from app.models import Conversation, Customer, Message, MessageTranslation, now, uid
 from app.services.ai import month_spend, record_usage
 from app.services.ai_config import settings
+from app.services.dialog_languages import client_language, incoming_enabled, manager_language
 from app.services.outbox import emit
 
 
@@ -24,21 +26,21 @@ def languages(message, customer):
         or message.kind in ("geo", "vcard")
     ):
         return None
-    if message.status == "translating" and message.delivery_target_language:
+    if message.delivery_source_language and message.delivery_target_language:
         return message.delivery_source_language, message.delivery_target_language
     if not customer:
         return None
     if message.direction == "in" and customer.translate_incoming:
-        return customer.translation_client_language, customer.translation_manager_language
+        return client_language(customer, "auto"), customer.translation_manager_language
     if message.direction == "out" and customer.translate_outgoing:
-        return customer.translation_manager_language, customer.translation_client_language
+        return customer.translation_manager_language, client_language(customer, "en")
     return None
 
 
 def prepare_outgoing(db, conversation, message):
     customer = db.get(Customer, conversation.customer_id) if conversation.customer_id else None
     pair = languages(message, customer)
-    if pair and message.direction == "out":
+    if pair and message.direction == "out" and pair[0] != pair[1]:
         message.delivery_source_language, message.delivery_target_language = pair
         message.status, message.next_attempt_at = "translating", None
 
@@ -54,6 +56,82 @@ def translation_row(db, message, pair):
             MessageTranslation.target_language == pair[1],
         )
     )
+
+
+def request_translation(db, message, source, target, original):
+    row = translation_row(db, message, (source, target))
+    if not row:
+        db.execute(
+            insert(MessageTranslation)
+            .values(
+                id=uid(),
+                message_id=message.id,
+                revision=message.version,
+                source_language=source,
+                target_language=target,
+                original=original,
+                body="",
+                state="pending",
+                attempts=0,
+                next_attempt_at=now(),
+                updated_at=now(),
+            )
+            .on_conflict_do_nothing(
+                index_elements=["message_id", "revision", "source_language", "target_language"]
+            )
+        )
+        row = translation_row(db, message, (source, target))
+    return row
+
+
+def view_translation(db, message, customer, user):
+    """Return the viewer's reading version without translating on a polling request."""
+    if (
+        message.deleted
+        or message.is_private_note
+        or message.author_type == "system"
+        or not message.body
+        or message.kind in ("geo", "vcard")
+    ):
+        return None
+    target = manager_language(user)
+    if message.direction == "in":
+        if not incoming_enabled(customer, target):
+            return None
+        source, original = client_language(customer, "auto"), message.body
+    else:
+        if message.delivery_source_language == target:
+            return {
+                "state": "ready",
+                "text": message.body,
+                "source": target,
+                "target": target,
+                "error": None,
+            }
+        if message.delivery_body is None and message.delivery_source_language:
+            source, original = message.delivery_source_language, message.body
+        else:
+            source = message.delivery_target_language or client_language(customer)
+            original = message.delivery_body if message.delivery_body is not None else message.body
+        # Legacy/provider history without a known language must not enqueue every message on polling.
+        if not source:
+            return None
+    if source == target:
+        return {
+            "state": "ready",
+            "text": original,
+            "source": source,
+            "target": target,
+            "error": None,
+        }
+    row = request_translation(db, message, source, target, original)
+    return {
+        "state": row.state,
+        "text": row.body if row.state == "ready" else None,
+        "source": source,
+        "target": target,
+        "error": row.error,
+    }
 
 
 async def translate_text(value, source, target):
@@ -111,89 +189,95 @@ async def translate_text(value, source, target):
 
 
 async def translate_one():
-    # Join on revision and languages so edited messages and changed preferences regenerate.
-    source = case(
-        (Message.status == "translating", Message.delivery_source_language),
-        (Message.direction == "in", Customer.translation_client_language),
-        else_=Customer.translation_manager_language,
-    )
-    target = case(
-        (Message.status == "translating", Message.delivery_target_language),
-        (Message.direction == "in", Customer.translation_manager_language),
-        else_=Customer.translation_client_language,
-    )
     with SessionLocal() as db:
-        candidate = db.scalar(
+        due = (
+            select(MessageTranslation.id)
+            .where(
+                MessageTranslation.message_id == Message.id,
+                MessageTranslation.revision == Message.version,
+                MessageTranslation.state != "ready",
+                MessageTranslation.attempts < 3,
+                MessageTranslation.next_attempt_at <= now(),
+            )
+            .exists()
+        )
+        # All paths lock the message before its translation, including manual retries.
+        msg = db.scalar(
             select(Message)
-            .join(Conversation, Conversation.id == Message.conversation_id)
-            .join(Customer, Customer.id == Conversation.customer_id)
-            .outerjoin(
-                MessageTranslation,
-                and_(
+            .where(~Message.deleted, due)
+            .order_by(Message.created_at)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        row = None
+        if msg:
+            row = db.scalar(
+                select(MessageTranslation)
+                .where(
+                    MessageTranslation.message_id == msg.id,
+                    MessageTranslation.revision == msg.version,
+                    MessageTranslation.state != "ready",
+                    MessageTranslation.attempts < 3,
+                    MessageTranslation.next_attempt_at <= now(),
+                )
+                .order_by(MessageTranslation.next_attempt_at)
+                .limit(1)
+                .with_for_update()
+            )
+        else:
+            queued = (
+                select(MessageTranslation.id)
+                .where(
                     MessageTranslation.message_id == Message.id,
                     MessageTranslation.revision == Message.version,
-                    MessageTranslation.source_language == source,
-                    MessageTranslation.target_language == target,
-                ),
+                    MessageTranslation.source_language == Message.delivery_source_language,
+                    MessageTranslation.target_language == Message.delivery_target_language,
+                )
+                .exists()
             )
-            .where(
-                Message.body != "",
-                Message.deleted.is_(False),
-                Message.is_private_note.is_(False),
-                Message.author_type != "system",
-                Message.kind.not_in(["geo", "vcard"]),
-                or_(
+            msg = db.scalar(
+                select(Message)
+                .where(
                     Message.status == "translating",
-                    and_(Message.direction == "in", Customer.translate_incoming),
-                    and_(Message.direction == "out", Customer.translate_outgoing),
-                ),
-                or_(
-                    MessageTranslation.id.is_(None),
-                    and_(
-                        MessageTranslation.state != "ready",
-                        MessageTranslation.next_attempt_at <= now(),
-                        MessageTranslation.attempts < 3,
-                    ),
-                ),
+                    ~Message.deleted,
+                    ~queued,
+                )
+                .order_by(Message.created_at)
+                .limit(1)
+                .with_for_update(skip_locked=True)
             )
-            .order_by(
-                case((Message.status == "translating", 0), else_=1), Message.created_at.desc()
-            )
-            .limit(1)
-            .with_for_update(of=Message, skip_locked=True)
-        )
-        if candidate is None:
+            if msg:
+                c = db.get(Conversation, msg.conversation_id)
+                pair = languages(
+                    msg, db.get(Customer, c.customer_id) if c and c.customer_id else None
+                )
+                if pair:
+                    row = request_translation(db, msg, pair[0], pair[1], msg.body)
+        if row is None or msg is None:
             return False
-        c = db.get(Conversation, candidate.conversation_id)
-        assert c is not None
-        pair = languages(candidate, db.get(Customer, c.customer_id))
-        assert pair is not None
-        row = translation_row(db, candidate, pair)
-        if not row:
-            row = MessageTranslation(
-                id=uid(),
-                message_id=candidate.id,
-                revision=candidate.version,
-                source_language=pair[0],
-                target_language=pair[1],
-                original=candidate.body,
-            )
-            db.add(row)
-            db.flush()
+        message_id = msg.id
         row.state, row.updated_at = "processing", now()
         row.next_attempt_at = now() + timedelta(minutes=2)
         row.attempts += 1
-        ident, original, source_lang, target_lang = row.id, row.original, pair[0], pair[1]
+        ident, original, source, target, attempt = (
+            row.id,
+            row.original,
+            row.source_language,
+            row.target_language,
+            row.attempts,
+        )
         db.commit()
     try:
-        translated, error = await translate_text(original, source_lang, target_lang), None
+        translated, error = await translate_text(original, source, target), None
     except AIError as exc:
         translated, error = "", str(exc)
     with SessionLocal() as db:
-        row = db.get(MessageTranslation, ident)
-        if row is None:
+        msg = db.scalar(select(Message).where(Message.id == message_id).with_for_update())
+        row = db.scalar(
+            select(MessageTranslation).where(MessageTranslation.id == ident).with_for_update()
+        )
+        if not row or row.attempts != attempt or row.state != "processing":
             return False
-        msg = db.scalar(select(Message).where(Message.id == row.message_id).with_for_update())
         row.body, row.error = translated, error
         row.state, row.updated_at = ("error" if error else "ready"), now()
         row.next_attempt_at = now() + timedelta(minutes=1)
@@ -205,6 +289,8 @@ async def translate_one():
             and not msg.deleted
             and msg.version == row.revision
             and msg.status == "translating"
+            and msg.delivery_source_language == source
+            and msg.delivery_target_language == target
         ):
             msg.delivery_body = translated
             msg.status, msg.next_attempt_at = "queued", now()

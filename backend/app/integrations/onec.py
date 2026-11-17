@@ -6,6 +6,7 @@ import math
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+import phonenumbers
 
 
 class OneCError(Exception):
@@ -39,9 +40,28 @@ def customer_endpoint(value: str) -> str:
         raise OneCError("invalid_url") from None
 
 
+def exact_phone(phone: str) -> str:
+    """Canonical international number; never guess a country or accept suffixes."""
+    if not isinstance(phone, str) or any(ch not in "+0123456789 ()-." for ch in phone):
+        return ""
+    try:
+        parsed = phonenumbers.parse("+" + phone.lstrip("+"), None)
+        if phonenumbers.is_valid_number(parsed):
+            return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+    except phonenumbers.NumberParseException:
+        pass
+    return ""
+
+
 def phone_digits(phone: str) -> str:
-    digits = "".join(ch for ch in phone if ch in "0123456789")
-    return digits if 6 <= len(digits) <= 15 and "@" not in phone else ""
+    return exact_phone(phone).lstrip("+")
+
+
+def phone_country(phone: str) -> str:
+    canonical = exact_phone(phone)
+    if not canonical:
+        return ""
+    return phonenumbers.region_code_for_number(phonenumbers.parse(canonical, None)) or ""
 
 
 class OneCAdapter:
@@ -66,7 +86,9 @@ class OneCAdapter:
                     auth=httpx.BasicAuth(self.username, self.password),
                 ) as client,
             ):
-                async with client.stream("GET", url, params={"phone": digits}) as response:
+                async with client.stream(
+                    "GET", url, params={"phone": digits, "match": "exact"}
+                ) as response:
                     if response.status_code != 200:
                         code = {
                             401: "authentication",
@@ -97,6 +119,12 @@ class OneCAdapter:
                     raise ValueError
                 # Keep same-name clients and duplicate order numbers separate, as 1C does.
                 customer = {"name": item["name"], "realizations": item["realizations"]}
+                if "matched_phone" in item:
+                    if not isinstance(item["matched_phone"], str):
+                        raise ValueError
+                    matched = exact_phone(item["matched_phone"])
+                    if matched:
+                        customer["matched_phone"] = matched
                 if "country" in item:
                     if not isinstance(item["country"], str):
                         raise ValueError

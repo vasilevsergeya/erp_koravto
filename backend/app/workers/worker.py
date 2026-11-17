@@ -30,7 +30,6 @@ from app.models import (
 from app.services.ai import queue_inbound, supersede
 from app.services.customers import attach_conversation, structure_lock
 from app.services.message_actions import process_action, recover_actions
-from app.services.notifications import notify_inbound
 from app.services.onec_customers import refresh_customers_loop
 from app.services.outbox import deliver_message, status_forward
 from app.services.response_state import acknowledge_reply, refresh_unanswered
@@ -224,7 +223,6 @@ async def process_webhook(ctx, event_id: str):
                 db.flush()
                 if inbound:
                     queue_inbound(db, conversation, message)
-                    notify_inbound(db, conversation, message)
                 else:
                     sending = db.scalar(
                         select(Message.id)

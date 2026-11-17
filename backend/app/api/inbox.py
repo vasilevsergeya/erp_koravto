@@ -12,7 +12,7 @@ from sqlalchemy import Text, and_, case, cast, func, or_, select, text
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.api.auth import current_user
+from app.api.auth import current_user, rate_limit
 from app.core.db import get_db
 from app.core.security import file_signer
 from app.core.settings import get_setting
@@ -33,6 +33,12 @@ from app.models import (
 )
 from app.services.ai import supersede
 from app.services.customers import attach_conversation, structure_lock
+from app.services.dialog_languages import (
+    client_language,
+    incoming_enabled,
+    manager_language,
+    outgoing_language,
+)
 from app.services.message_content import rich_content
 from app.services.onec_customers import connection_settings, customer_snapshot, refresh_customer
 from app.services.outbox import emit, error_text
@@ -122,13 +128,16 @@ def describe_conversation(c, db, user_id=None):
         "updated_at": (last.sent_at or last.created_at) if last else c.created_at,
         "inbound_seq": c.inbound_seq,
         "translation": {
-            k: getattr(profile, k)
-            for k in (
-                "translate_incoming",
-                "translate_outgoing",
-                "translation_client_language",
-                "translation_manager_language",
-            )
+            "translate_incoming": incoming_enabled(
+                profile, manager_language(db.get(User, user_id) if user_id else None)
+            ),
+            "incoming_translation_auto": profile.incoming_translation_auto,
+            "translate_outgoing": profile.translate_outgoing,
+            "translation_client_language": client_language(profile),
+            "client_language_mode": profile.translation_client_language,
+            "translation_manager_language": manager_language(
+                db.get(User, user_id) if user_id else None
+            ),
         }
         if profile
         else None,
@@ -145,11 +154,12 @@ def describe_conversation(c, db, user_id=None):
         ),
         "last_message": ("Сообщение удалено" if last.deleted else last.body[:120]) if last else "",
         "last_status": last.status if last else "",
+        "last_has_attachment": bool(last and last.attachment_id and not last.deleted),
     }
 
 
 def describe_message(m, db, user_id=None):
-    from app.services.translations import languages, translation_row
+    from app.services.translations import languages, translation_row, view_translation
 
     conversation = db.get(Conversation, m.conversation_id)
     profile = (
@@ -159,6 +169,7 @@ def describe_message(m, db, user_id=None):
     )
     pair = languages(m, profile)
     translated = translation_row(db, m, pair)
+    reading = view_translation(db, m, profile, db.get(User, user_id)) if user_id else None
     action = db.scalar(
         select(MessageAction)
         .where(MessageAction.message_id == m.id)
@@ -201,6 +212,9 @@ def describe_message(m, db, user_id=None):
         }
         if pair
         else None,
+        "reading_translation": reading,
+        "delivery_language": m.delivery_target_language,
+        "source_language": m.delivery_source_language,
         "delivery_text": m.delivery_body if not m.deleted else None,
         "kind": m.kind,
         "status": m.status,
@@ -364,7 +378,9 @@ def messages(
         rows = db.scalars(
             query.where(Message.id.in_(keys)).order_by(message_activity(), Message.id)
         ).all()
-        return [describe_message(m, db, user.id) for m in rows]
+        result = [describe_message(m, db, user.id) for m in rows]
+        db.commit()
+        return result
     if before:
         cursor = db.get(Message, before)
         if not cursor or cursor.conversation_id != conversation_id:
@@ -379,7 +395,9 @@ def messages(
     rows = db.scalars(
         query.order_by(message_activity().desc(), Message.id.desc()).offset(offset).limit(50)
     ).all()
-    return [describe_message(m, db, user.id) for m in reversed(rows)]
+    result = [describe_message(m, db, user.id) for m in reversed(rows)]
+    db.commit()
+    return result
 
 
 class MessageInput(BaseModel):
@@ -388,6 +406,8 @@ class MessageInput(BaseModel):
     attachment_id: str | None = None
     quoted_message_id: str | None = None
     is_private_note: bool = False
+    source_language: str | None = Field(None, pattern=r"^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$")
+    target_language: str | None = Field(None, pattern=r"^original$|^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$")
 
 
 class NewConversation(MessageInput):
@@ -397,7 +417,7 @@ class NewConversation(MessageInput):
     name: str = Field("", max_length=200)
 
 
-def enqueue(db, conversation, body, user):
+def enqueue(db, conversation, body, user, *, prepared=None):
     message_id = str(body.client_id)
     # A stable client UUID makes HTTP retries idempotent even after losing the response.
     existing = db.get(Message, message_id)
@@ -413,6 +433,21 @@ def enqueue(db, conversation, body, user):
             or existing.attachment_id != body.attachment_id
             or existing.quoted_message_id != body.quoted_message_id
             or existing.is_private_note != body.is_private_note
+            or (
+                body.source_language
+                and not body.is_private_note
+                and existing.delivery_source_language != body.source_language
+            )
+            or (
+                body.target_language
+                and not body.is_private_note
+                and existing.delivery_target_language
+                != (
+                    body.source_language
+                    if body.target_language == "original"
+                    else body.target_language
+                )
+            )
         ):
             raise HTTPException(
                 409, "Содержание отправки изменилось. Обновите диалог перед повтором."
@@ -448,15 +483,28 @@ def enqueue(db, conversation, body, user):
         status="note" if body.is_private_note else "queued",
         is_private_note=body.is_private_note,
         quoted_message_id=body.quoted_message_id,
-        quoted_text=quoted.body[:1000] if quoted else "",
+        quoted_text=(quoted.delivery_body if quoted.delivery_body is not None else quoted.body)[
+            :1000
+        ]
+        if quoted
+        else "",
         created_at=timestamp,
         reply_through_seq=conversation.inbound_seq,
         next_attempt_at=None if body.is_private_note else timestamp,
     )
-    if not body.is_private_note:
-        from app.services.translations import prepare_outgoing
 
-        prepare_outgoing(db, conversation, msg)
+    def prepare(message):
+        if prepared is None:
+            from app.services.translations import prepare_outgoing
+
+            prepare_outgoing(db, conversation, message)
+        else:
+            translated, source, target = prepared
+            message.delivery_source_language, message.delivery_target_language = source, target
+            message.delivery_body = translated if message.body else ""
+
+    if not body.is_private_note:
+        prepare(msg)
         supersede(db, conversation.id, "manual_reply")
     db.add(msg)
     if attachment and body.text.strip() and not body.is_private_note:
@@ -475,7 +523,7 @@ def enqueue(db, conversation, body, user):
             next_attempt_at=timestamp,
             reply_through_seq=conversation.inbound_seq,
         )
-        prepare_outgoing(db, conversation, caption)
+        prepare(caption)
         db.add(caption)
     if not body.is_private_note:
         conversation.updated_at = timestamp
@@ -492,15 +540,46 @@ def enqueue(db, conversation, body, user):
     return msg
 
 
+async def translate_before_send(value, source, target):
+    from app.integrations.openai import AIError
+    from app.services.translations import translate_text
+
+    if not value.strip() or source == target:
+        return value
+    try:
+        return await translate_text(value, source, target)
+    except AIError:
+        raise HTTPException(
+            502,
+            "Не удалось перевести сообщение. Оно не отправлено; текст сохранён. Повторите попытку или выберите отправку без перевода.",
+        ) from None
+
+
 @router.post("/conversations/{conversation_id}/messages", status_code=201)
-def send(
+async def send(
     conversation_id: str, body: MessageInput, user=Depends(writer), db: Session = Depends(get_db)
 ):
+    prepared = None
+    if body.source_language and not body.is_private_note:
+        conversation = db.get(Conversation, conversation_id)
+        if not conversation:
+            raise HTTPException(404, "Диалог не найден")
+        if db.get(Message, str(body.client_id)):
+            msg = enqueue(db, locked_conversation(db, conversation_id), body, user)
+            return describe_message(msg, db, user.id)
+        profile = db.get(Customer, conversation.customer_id) if conversation.customer_id else None
+        source = body.source_language
+        target = outgoing_language(profile, source, body.target_language)
+        rate_limit("translate-send:" + user.id, 30, 60)
+        # No conversation/DB lock is held while waiting for the translator.
+        db.rollback()
+        translated = await translate_before_send(body.text, source, target)
+        prepared = (translated, source, target)
     conversation = locked_conversation(db, conversation_id)
-    msg = enqueue(db, conversation, body, user)
+    msg = enqueue(db, conversation, body, user, prepared=prepared)
     db.commit()
     emit(conversations=[conversation.id])
-    return describe_message(msg, db)
+    return describe_message(msg, db, user.id)
 
 
 @router.post("/conversations", status_code=201)

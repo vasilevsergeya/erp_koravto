@@ -1,17 +1,44 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Fragment,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   Alert,
   Badge,
   Button,
   Checkbox,
-  FileInput,
+  FileButton,
+  ActionIcon,
+  Menu,
   Loader,
   Modal,
+  Popover,
   Select,
   Textarea,
   TextInput,
 } from "@mantine/core";
+import {
+  Paperclip,
+  Plus,
+  SlidersHorizontal,
+  PanelRightClose,
+  PanelRightOpen,
+  StickyNote,
+  ListTodo,
+  CheckCheck,
+  Send,
+  X,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   api,
@@ -25,6 +52,8 @@ import {
   MessageActions,
   LinkedText,
   TranslationPreferences,
+  languageName,
+  SendLanguageMenu,
 } from "./MessageTools";
 import { ConversationTasks, createTask, openTask } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
@@ -44,9 +73,44 @@ type Member = { id: string; name: string; role: string };
 type OneCCustomer = {
   status: string;
   clients: OneCClient[];
+  candidates?: OneCClient[];
+  phone_country?: string;
   checked_at: string | null;
   stale: boolean;
   error: string | null;
+};
+function DetailField({
+  label,
+  value,
+  children,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  children: ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="crm-detail-row">
+      <span>{label}:</span>
+      <Popover position="bottom-end" width={240} shadow="md">
+        <Popover.Target>
+          <button className="crm-inline-value" disabled={disabled}>
+            {value || "—"}
+          </button>
+        </Popover.Target>
+        <Popover.Dropdown>{children}</Popover.Dropdown>
+      </Popover>
+    </div>
+  );
+}
+const regionName = (code?: string) => {
+  if (!code) return "—";
+  try {
+    return new Intl.DisplayNames(["ru"], { type: "region" }).of(code) || code;
+  } catch {
+    return code;
+  }
 };
 const time = (value: string) =>
   new Intl.DateTimeFormat("ru-RU", {
@@ -54,38 +118,120 @@ const time = (value: string) =>
     timeStyle: "short",
     timeZone: "Asia/Seoul",
   }).format(new Date(value));
+const dayKey = (value: string) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(
+    new Date(value),
+  );
+const clockTime = (value: string) =>
+  new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Seoul",
+  }).format(new Date(value));
+const shortTime = (value: string) =>
+  dayKey(value) === dayKey(new Date().toISOString())
+    ? clockTime(value)
+    : new Intl.DateTimeFormat("ru-RU", {
+        day: "2-digit",
+        month: "2-digit",
+        timeZone: "Asia/Seoul",
+      }).format(new Date(value));
+const dayLabel = (value: string) =>
+  dayKey(value) === dayKey(new Date().toISOString())
+    ? "Сегодня"
+    : new Intl.DateTimeFormat("ru-RU", {
+        day: "numeric",
+        month: "long",
+        timeZone: "Asia/Seoul",
+      }).format(new Date(value));
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
 export function Inbox({ user }: { user: User }) {
   const { t } = useTranslation("inbox");
   const query = useQueryClient();
+  const personalLanguage = useQuery({
+    queryKey: ["manager-language"],
+    queryFn: () => api<{ language: string }>("/api/me/language"),
+  });
+  const ownLanguage =
+    personalLanguage.data?.language || user.manager_language || "en";
   const [selected, setSelected] = useState<string | null>(
     () =>
       sessionStorage.getItem("crm-open-conversation") ||
       new URLSearchParams(location.search).get("conversation") ||
       sessionStorage.getItem(`crm-active-conversation:${user.id}`),
   );
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState(
+    () => localStorage.getItem(`crm-dialog-filter:${user.id}`) || "all",
+  );
+  const [panelOpen, setPanelOpen] = useState(() => {
+    const saved = localStorage.getItem(`crm-customer-panel:${user.id}`);
+    return saved === null ? window.innerWidth >= 1100 : saved === "true";
+  });
+  const list = useRef<HTMLDivElement>(null);
+  const listAnchor = useRef<{ id: string; top: number } | null>(null);
+  const initialScroll = useRef<string | null>(null);
+  const stickToBottom = useRef(true);
+  const loadingOlder = useRef(false);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  function captureListAnchor() {
+    const el = list.current;
+    if (!el || el.scrollTop < 4) {
+      listAnchor.current = null;
+      return;
+    }
+    const row = Array.from(
+      el.querySelectorAll<HTMLElement>("[data-dialog-id]"),
+    ).find((row) => row.offsetTop + row.offsetHeight > el.scrollTop);
+    if (row)
+      listAnchor.current = {
+        id: row.dataset.dialogId!,
+        top: row.offsetTop - el.scrollTop,
+      };
+  }
   const [search, setSearch] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [page, setPage] = useState(0);
   const initialDraft = useRef(loadDraft(user.id, selected));
   const [message, setMessage] = useState(initialDraft.current?.text || "");
-  const [file, setFile] = useState<File | null>(initialDraft.current?.file || null);
-  const [attachment, setAttachment] = useState<string | null>(initialDraft.current?.attachment || null);
+  const [editingDraft, setEditingDraft] = useState<string | null>(
+    initialDraft.current?.aiDraftId || null,
+  );
+  const [sourceLanguage, setSourceLanguage] = useState(
+    initialDraft.current?.sourceLanguage || ownLanguage,
+  );
+  const [sendLanguage, setSendLanguage] = useState<string | null>(
+    initialDraft.current?.targetLanguage || null,
+  );
+  const [sendError, setSendError] = useState(false);
+  useEffect(() => {
+    if (!message && !editingDraft) setSourceLanguage(ownLanguage);
+  }, [message, editingDraft, ownLanguage]);
+  const [file, setFile] = useState<File | null>(
+    initialDraft.current?.file || null,
+  );
+  const [attachment, setAttachment] = useState<string | null>(
+    initialDraft.current?.attachment || null,
+  );
   const [note, setNote] = useState(initialDraft.current?.note || false);
   const [originals, setOriginals] = useState<Record<string, boolean>>({});
-  const [quoted, setQuoted] = useState<Message | null>(initialDraft.current?.quoted || null);
+  const [quoted, setQuoted] = useState<Message | null>(
+    initialDraft.current?.quoted || null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [sendId, setSendId] = useState<string>(() => initialDraft.current?.sendId || crypto.randomUUID());
+  const [sendId, setSendId] = useState<string>(
+    () => initialDraft.current?.sendId || crypto.randomUUID(),
+  );
   const [older, setOlder] = useState<Message[]>([]);
   const [hasOlder, setHasOlder] = useState(true);
   const [newOpen, setNewOpen] = useState(false);
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
-  const [country, setCountry] = useState("RU");
+  const [country, setCountry] = useState(
+    () => localStorage.getItem(`crm-dialog-country:${user.id}`) || "RU",
+  );
   const [channel, setChannel] = useState<string | null>(null);
   const [firstText, setFirstText] = useState("");
   const [newId, setNewId] = useState<string>(() => crypto.randomUUID());
@@ -126,22 +272,48 @@ export function Inbox({ user }: { user: User }) {
         note: boolean;
         quoted: Message | null;
         sendId: string;
+        aiDraftId?: string | null;
+        sourceLanguage?: string;
+        targetLanguage?: string | null;
       }
     >
   >({});
   const canWrite = user.role === "admin" || user.role === "manager";
   useEffect(() => {
-    if (selected) saveDraft(user.id, selected, { text: message, file, attachment, note, quoted, sendId });
-  }, [user.id, selected, message, file, attachment, note, quoted, sendId]);
+    if (selected)
+      saveDraft(user.id, selected, {
+        text: message,
+        file,
+        attachment,
+        note,
+        quoted,
+        sendId,
+        aiDraftId: editingDraft,
+        sourceLanguage,
+        targetLanguage: sendLanguage,
+      });
+  }, [
+    user.id,
+    selected,
+    message,
+    file,
+    attachment,
+    note,
+    quoted,
+    sendId,
+    editingDraft,
+    sourceLanguage,
+    sendLanguage,
+  ]);
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearchQuery(search);
-      setPage(0);
+      listAnchor.current = null;
+      if (list.current) list.current.scrollTop = 0;
     }, 250);
     return () => clearTimeout(timer);
   }, [search]);
   const params = new URLSearchParams({
-    offset: String(page * 50),
     q: searchQuery,
   });
   if (filter === "waiting_us" || filter === "closed")
@@ -149,21 +321,31 @@ export function Inbox({ user }: { user: User }) {
   if (filter === "mine") params.set("assignee", "me");
   if (filter === "ai_draft") params.set("ai_draft", "true");
   if (filter === "human") params.set("needs_human", "true");
-  const conversations = useQuery({
+  const conversations = useInfiniteQuery({
     queryKey: ["conversations", params.toString()],
-    queryFn: () => api<Conversation[]>("/api/conversations?" + params),
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api<Conversation[]>(
+        "/api/conversations?" + params + "&offset=" + pageParam,
+      ),
+    getNextPageParam: (last, pages) =>
+      last.length === 50 ? pages.length * 50 : undefined,
     refetchInterval: 5000,
   });
-  const integration = useQuery({
-    queryKey: ["integration-health"],
-    queryFn: () =>
-      api<{
-        checked_at: string | null;
-        warnings: { code: string; text: string }[];
-      }>("/api/integrations/health"),
-    refetchInterval: 60000,
-    retry: false,
-  });
+  const dialogRows = Array.from(
+    new Map(
+      (conversations.data?.pages.flat() || []).map((c) => [c.id, c]),
+    ).values(),
+  );
+  useLayoutEffect(() => {
+    const el = list.current,
+      anchor = listAnchor.current;
+    if (!el || !anchor) return;
+    const row = Array.from(
+      el.querySelectorAll<HTMLElement>("[data-dialog-id]"),
+    ).find((row) => row.dataset.dialogId === anchor.id);
+    if (row) el.scrollTop = row.offsetTop - anchor.top;
+  }, [conversations.data]);
   const counters = useQuery({
     queryKey: ["conversation-counts"],
     queryFn: () => api<Record<string, number>>("/api/conversations/counts"),
@@ -237,73 +419,159 @@ export function Inbox({ user }: { user: User }) {
         )
         .catch(() => {});
   }, [selected, current.data?.task_updated, query]);
+  useLayoutEffect(() => {
+    if (stickToBottom.current && pane.current)
+      pane.current.scrollTop = pane.current.scrollHeight;
+  }, [message, file, quoted, note]);
   const lastId = messages.data?.at(-1)?.id;
   useEffect(() => {
     const element = pane.current;
-    if (
+    if (element && messages.data && initialScroll.current !== selected) {
+      element.scrollTop = element.scrollHeight;
+      initialScroll.current = selected;
+    } else if (
       element &&
       element.scrollHeight - element.scrollTop - element.clientHeight < 350
     )
       end.current?.scrollIntoView({ block: "end" });
-  }, [lastId]);
-  const choose = useCallback((id: string | null) => {
-    if (selected)
-      drafts.current[selected] = {
-        text: message,
-        file,
-        attachment,
-        note,
-        quoted,
-        sendId,
-      };
-    const draft = id ? drafts.current[id] || loadDraft(user.id, id) : undefined;
-    setSelected(id);
-    setOlder([]);
-    setHasOlder(true);
-    setMessage(draft?.text || "");
-    setFile(draft?.file || null);
-    setAttachment(draft?.attachment || null);
-    setQuoted(draft?.quoted || null);
-    setNote(draft?.note || false);
-    setSendId(draft?.sendId || crypto.randomUUID());
-    setError("");
-    setCustomerError("");
-  }, [selected, message, file, attachment, note, quoted, sendId, user.id]);
+  }, [lastId, selected, messages.data]);
+  const choose = useCallback(
+    (id: string | null) => {
+      if (selected)
+        drafts.current[selected] = {
+          text: message,
+          file,
+          attachment,
+          note,
+          quoted,
+          sendId,
+          aiDraftId: editingDraft,
+          sourceLanguage,
+          targetLanguage: sendLanguage,
+        };
+      const draft = id
+        ? drafts.current[id] || loadDraft(user.id, id)
+        : undefined;
+      initialScroll.current = null;
+      stickToBottom.current = true;
+      setSelected(id);
+      setOlder([]);
+      setHasOlder(true);
+      setMessage(draft?.text || "");
+      setEditingDraft(draft?.aiDraftId || null);
+      setSourceLanguage(draft?.sourceLanguage || ownLanguage);
+      setSendLanguage(draft?.targetLanguage || null);
+      setSendError(false);
+      setFile(draft?.file || null);
+      setAttachment(draft?.attachment || null);
+      setQuoted(draft?.quoted || null);
+      setNote(draft?.note || false);
+      setSendId(draft?.sendId || crypto.randomUUID());
+      setError("");
+      setCustomerError("");
+    },
+    [
+      selected,
+      message,
+      file,
+      attachment,
+      note,
+      quoted,
+      sendId,
+      user.id,
+      editingDraft,
+      sourceLanguage,
+      sendLanguage,
+      ownLanguage,
+    ],
+  );
   useEffect(() => {
     sessionStorage.removeItem("crm-open-conversation");
-    const show = (event: Event) => choose((event as CustomEvent<string>).detail);
+    const show = (event: Event) =>
+      choose((event as CustomEvent<string>).detail);
     window.addEventListener("crm:conversation", show);
     return () => window.removeEventListener("crm:conversation", show);
   }, [choose]);
+  function attachFile(value: File | null) {
+    if (value && value.size > 10 * 1024 * 1024) {
+      setError(t("fileLimit"));
+      return;
+    }
+    setFile(value);
+    setAttachment(null);
+  }
   async function send() {
     if (!selected || busy) return;
     setBusy(true);
     setError("");
+    setSendError(false);
     const target = selected;
     try {
       let attachmentId = attachment;
       if (file && !attachmentId) {
         attachmentId = (await uploadFile(file)).id;
-        setAttachment(attachmentId);
+        if (selectedRef.current === target) setAttachment(attachmentId);
+        else if (drafts.current[target]) {
+          drafts.current[target] = {
+            ...drafts.current[target],
+            attachment: attachmentId,
+          };
+          saveDraft(user.id, target, drafts.current[target]);
+        }
       }
-      await api("/api/conversations/" + target + "/messages", "POST", {
-        client_id: sendId,
-        text: message,
-        attachment_id: attachmentId,
-        quoted_message_id: quoted?.id || null,
-        is_private_note: note,
-      });
+      const language =
+        sendLanguage ||
+        (editingDraft
+          ? current.data?.translation?.translation_client_language || ""
+          : current.data?.translation?.translate_outgoing
+            ? current.data.translation.translation_client_language
+            : "original");
+      if (!note && !language)
+        throw new Error(
+          "Язык клиента ещё не определён. Выберите язык отправки.",
+        );
+      if (editingDraft && !note) {
+        await api("/api/drafts/" + editingDraft + "/send-edited", "POST", {
+          final_text: message,
+          source_language: sourceLanguage,
+          target_language: language,
+          attachment_id: attachmentId,
+          quoted_message_id: quoted?.id || null,
+        });
+      } else {
+        await api("/api/conversations/" + target + "/messages", "POST", {
+          client_id: sendId,
+          text: message,
+          attachment_id: attachmentId,
+          quoted_message_id: quoted?.id || null,
+          is_private_note: note,
+          source_language: sourceLanguage,
+          target_language: language || "original",
+        });
+      }
       delete drafts.current[target];
       removeDraft(user.id, target);
-      setMessage("");
-      setFile(null);
-      setAttachment(null);
-      setQuoted(null);
-      setSendId(crypto.randomUUID());
+      if (selectedRef.current === target) {
+        setMessage("");
+        setFile(null);
+        setAttachment(null);
+        setQuoted(null);
+        setSendId(crypto.randomUUID());
+        setEditingDraft(null);
+        setSendLanguage(null);
+        setSourceLanguage(ownLanguage);
+      }
+      void query.invalidateQueries({ queryKey: ["ai-draft", target] });
       refresh();
-      setTimeout(() => end.current?.scrollIntoView({ block: "end" }), 150);
+      setTimeout(() => {
+        if (selectedRef.current === target)
+          end.current?.scrollIntoView({ block: "end" });
+      }, 150);
     } catch (e) {
-      setError(errorText(e));
+      if (selectedRef.current === target) {
+        setError(errorText(e));
+        setSendError(true);
+      }
     } finally {
       setBusy(false);
     }
@@ -359,15 +627,27 @@ export function Inbox({ user }: { user: User }) {
   }
   async function loadOlder() {
     const before = older[0]?.id || messages.data?.[0]?.id;
-    if (!before || !selected) return;
+    if (!before || !selected || loadingOlder.current) return;
+    loadingOlder.current = true;
+    const target = selected;
+    const el = pane.current,
+      height = el?.scrollHeight || 0,
+      top = el?.scrollTop || 0;
     try {
       const rows = await api<Message[]>(
         "/api/conversations/" + selected + "/messages?before=" + before,
       );
+      if (selectedRef.current !== target) return;
       setOlder((previous) => [...rows, ...previous]);
       setHasOlder(rows.length === 50);
+      requestAnimationFrame(() => {
+        if (el && selectedRef.current === target)
+          el.scrollTop = top + el.scrollHeight - height;
+      });
     } catch (e) {
-      setError(errorText(e));
+      if (selectedRef.current === target) setError(errorText(e));
+    } finally {
+      loadingOlder.current = false;
     }
   }
   const oldMessages = useQuery({
@@ -407,41 +687,53 @@ export function Inbox({ user }: { user: User }) {
   const displayName = c?.display_name || c?.name || c?.phone;
   const customerCard = (
     <div className="crm-customer-content">
-      {c?.customer_id && <CustomerSidebar id={c.customer_id} />}
-      {c?.customer_id && (
-        <TranslationPreferences
-          key={c.id}
-          customerId={c.customer_id}
-          canWrite={canWrite}
-          original={!!originals[c.id]}
-          onOriginal={(value) => setOriginals((p) => ({ ...p, [c.id]: value }))}
-        />
-      )}
-      {c && <ConversationTasks conversation={c} />}
-      <h3>{t("customer")}</h3>
-      <TextInput
+      {c?.customer_id && <CustomerSidebar id={c.customer_id} compact />}
+      <DetailField
         label={t("chatName")}
-        key={c?.id + ":" + c?.name}
-        defaultValue={c?.name || ""}
+        value={c?.name || ""}
         disabled={!canWrite}
-        onBlur={(e) => {
-          if (e.currentTarget.value !== c?.name)
-            void change({ name: e.currentTarget.value });
-        }}
-      />
-      <p>{c?.phone}</p>
-      <Select
+      >
+        <TextInput
+          aria-label={t("chatName")}
+          key={c?.id + ":" + c?.name}
+          defaultValue={c?.name || ""}
+          onBlur={(e) => {
+            if (e.currentTarget.value !== c?.name)
+              void change({ name: e.currentTarget.value });
+          }}
+        />
+      </DetailField>
+      <div className="crm-detail-row">
+        <span>Телефон:</span>
+        <a href={"tel:" + c?.phone}>{c?.phone || "—"}</a>
+      </div>
+      <div
+        className="crm-detail-row"
+        title="Регион телефонного номера, не место проживания клиента"
+      >
+        <span>Страна номера:</span>
+        <b>{regionName(onec?.phone_country)}</b>
+      </div>
+      <DetailField
         label={t("assignee")}
-        value={c?.assignee_id || null}
-        clearable
+        value={
+          team.data?.find((u) => u.id === c?.assignee_id)?.name || "Не назначен"
+        }
         disabled={!canWrite}
-        data={(team.data || [])
-          .filter((u) => u.role !== "staff")
-          .map((u) => ({ value: u.id, label: u.name }))}
-        onChange={(value) => void change({ assignee_id: value })}
-      />
+      >
+        <Select
+          aria-label={t("assignee")}
+          value={c?.assignee_id || null}
+          clearable
+          comboboxProps={{ withinPortal: false }}
+          data={(team.data || [])
+            .filter((u) => u.role !== "staff")
+            .map((u) => ({ value: u.id, label: u.name }))}
+          onChange={(value) => void change({ assignee_id: value })}
+        />
+      </DetailField>
       <Checkbox
-        mt="md"
+        size="xs"
         label={t("human")}
         checked={!!c?.needs_human}
         disabled={!canWrite}
@@ -449,7 +741,32 @@ export function Inbox({ user }: { user: User }) {
       />
 
       <section className="crm-onec" aria-label={t("onecCustomer")}>
-        <h4>{t("onecCustomer")}</h4>
+        <div
+          className="crm-detail-heading"
+          title={
+            onec?.checked_at
+              ? t("onecChecked") + " " + time(onec.checked_at)
+              : undefined
+          }
+        >
+          <b>
+            {onec?.status === "not_found"
+              ? "Заказы · 1С: не найдены"
+              : "Заказы · 1С"}
+          </b>
+          {canWrite && (
+            <ActionIcon
+              size="sm"
+              variant="subtle"
+              title={t("onecRefresh")}
+              aria-label={t("onecRefresh")}
+              loading={refreshingCustomer || customer.isFetching}
+              onClick={() => void refreshCustomer()}
+            >
+              ↻
+            </ActionIcon>
+          )}
+        </div>
         {customer.isLoading && (
           <p role="status">
             <Loader size="xs" /> {t("onecLoading")}
@@ -462,9 +779,11 @@ export function Inbox({ user }: { user: User }) {
         )}
         {onec && (
           <>
-            {onec.status !== "matched" && (
+            {!["matched", "not_found"].includes(onec.status) && (
               <p className="crm-muted" role="status">
-                {t("onec_" + onec.status)}
+                {onec.status === "unverified"
+                  ? "Точное совпадение телефона не подтверждено"
+                  : t("onec_" + onec.status)}
               </p>
             )}
             {onec.error && onec.status === "unavailable" && (
@@ -474,30 +793,73 @@ export function Inbox({ user }: { user: User }) {
                 })}
               </p>
             )}
+            {!!onec.candidates?.length && (
+              <details className="crm-onec-candidates">
+                <summary>
+                  Возможные совпадения · {onec.candidates.length}
+                </summary>
+                <small>
+                  Подсказки из 1С. Эти клиенты и заказы не привязаны к диалогу и
+                  не используются AI.
+                </small>
+                {onec.candidates.map((client, index) => (
+                  <OneCCustomerDetails key={index} client={client} compact />
+                ))}
+              </details>
+            )}
             {onec.clients.map((client, index) => (
               <OneCCustomerDetails key={index} client={client} compact />
             ))}
             {onec.stale && <p className="crm-onec-stale">{t("onecStale")}</p>}
-            {onec.checked_at && (
+            {onec.checked_at && onec.status !== "not_found" && (
               <small className="crm-muted">
                 {t("onecChecked")} {time(onec.checked_at)}
               </small>
             )}
           </>
         )}
-        {canWrite && (
-          <Button
-            mt="sm"
-            size="xs"
-            variant="light"
-            loading={refreshingCustomer || customer.isFetching}
-            onClick={() => void refreshCustomer()}
-          >
-            {t("onecRefresh")}
-          </Button>
-        )}
       </section>
-      <h4>{t("manualOrders")}</h4>
+      <div className="crm-detail-heading">
+        <span>Заказы вручную: {c?.order_numbers.length || "нет"}</span>
+        {canWrite && (
+          <Popover position="bottom-end" width={230} shadow="md">
+            <Popover.Target>
+              <ActionIcon
+                variant="subtle"
+                size="sm"
+                title={t("linkOrder")}
+                aria-label={t("linkOrder")}
+              >
+                <Plus size={14} />
+              </ActionIcon>
+            </Popover.Target>
+            <Popover.Dropdown>
+              <TextInput
+                aria-label={t("orderNumber")}
+                placeholder={t("orderNumber")}
+                value={order}
+                onChange={(e) => setOrder(e.currentTarget.value)}
+                maxLength={100}
+              />
+              <Button
+                mt="xs"
+                size="xs"
+                disabled={!order.trim()}
+                onClick={() => {
+                  void change({
+                    order_numbers: [
+                      ...new Set([...(c?.order_numbers || []), order.trim()]),
+                    ],
+                  });
+                  setOrder("");
+                }}
+              >
+                {t("linkOrder")}
+              </Button>
+            </Popover.Dropdown>
+          </Popover>
+        )}
+      </div>
       {c?.order_numbers.map((number) => (
         <div className="crm-order" key={number}>
           <span>{number}</span>
@@ -515,171 +877,165 @@ export function Inbox({ user }: { user: User }) {
           )}
         </div>
       ))}
+      {c && <ConversationTasks conversation={c} />}
       {canWrite && (
-        <>
-          <TextInput
-            aria-label={t("orderNumber")}
-            placeholder={t("orderNumber")}
-            value={order}
-            onChange={(e) => setOrder(e.currentTarget.value)}
-            maxLength={100}
-          />
-          <Button
-            mt="xs"
-            size="xs"
-            variant="light"
-            disabled={!order.trim()}
-            onClick={() => {
-              void change({
-                order_numbers: [
-                  ...new Set([...(c?.order_numbers || []), order.trim()]),
-                ],
-              });
-              setOrder("");
-            }}
-          >
-            {t("linkOrder")}
-          </Button>
-          <Button
-            mt="xl"
-            fullWidth
-            variant="default"
-            onClick={() =>
-              void change({
-                state: c?.state === "closed" ? "waiting_us" : "closed",
-              })
-            }
-          >
-            {t(c?.state === "closed" ? "reopen" : "close")}
-          </Button>
-        </>
+        <Button
+          mt="sm"
+          fullWidth
+          variant="default"
+          onClick={() =>
+            void change({
+              state: c?.state === "closed" ? "waiting_us" : "closed",
+            })
+          }
+        >
+          {t(c?.state === "closed" ? "reopen" : "close")}
+        </Button>
       )}
     </div>
   );
   return (
-    <div className={"crm-inbox " + (selected ? "has-selection" : "")}>
+    <div
+      className={
+        "crm-inbox " +
+        (selected ? "has-selection " : "") +
+        (!panelOpen ? "panel-collapsed" : "")
+      }
+    >
       <aside className="crm-dialogs">
         <div className="crm-toolbar">
-          <b>{t("dialogs")}</b>
+          <TextInput
+            aria-label={t("search")}
+            placeholder={t("search")}
+            size="xs"
+            value={search}
+            onChange={(e) => setSearch(e.currentTarget.value)}
+          />
+          <Menu position="bottom-start" withinPortal>
+            <Menu.Target>
+              <Button
+                size="xs"
+                variant={filter === "all" ? "subtle" : "light"}
+                title="Фильтр"
+                leftSection={<SlidersHorizontal size={13} />}
+              >
+                {filter === "all"
+                  ? "Фильтр"
+                  : filter === "ai_draft"
+                    ? "AI"
+                    : t(filter)}{" "}
+                · {counters.data?.[filter] ?? 0}
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              {["all", "waiting_us", "mine", "ai_draft", "human", "closed"].map(
+                (f) => (
+                  <Menu.Item
+                    key={f}
+                    color={filter === f ? "teal" : undefined}
+                    rightSection={counters.data?.[f] ?? 0}
+                    onClick={() => {
+                      setFilter(f);
+                      localStorage.setItem(`crm-dialog-filter:${user.id}`, f);
+                      listAnchor.current = null;
+                      if (list.current) list.current.scrollTop = 0;
+                    }}
+                  >
+                    {f === "ai_draft" ? t("v1:aiDraft") : t(f)}
+                  </Menu.Item>
+                ),
+              )}
+            </Menu.Dropdown>
+          </Menu>
           {canWrite && (
-            <Button
-              size="xs"
+            <ActionIcon
+              title={t("newDialog")}
+              aria-label={t("newDialog")}
               onClick={() => {
                 setError("");
                 setNewOpen(true);
               }}
             >
-              + {t("newDialog")}
-            </Button>
-          )}
-        </div>
-        {integration.data?.warnings
-          .filter(
-            (w) =>
-              w.code !== "webhook_silent" && w.code !== "subscription_repaired",
-          )
-          .map((w) => (
-            <Alert key={w.code} color="red" m="xs">
-              {w.text}
-            </Alert>
-          ))}
-        <TextInput
-          aria-label={t("search")}
-          placeholder={t("search")}
-          value={search}
-          onChange={(e) => setSearch(e.currentTarget.value)}
-          m="sm"
-        />
-        <div className="crm-filters">
-          {["all", "waiting_us", "mine", "ai_draft", "human", "closed"].map(
-            (f) => (
-              <button
-                className={filter === f ? "active" : ""}
-                key={f}
-                onClick={() => {
-                  setFilter(f);
-                  setPage(0);
-                }}
-              >
-                {f === "ai_draft" ? t("v1:aiDraft") : t(f)}{" "}
-                <small>{counters.data?.[f] ?? 0}</small>
-              </button>
-            ),
+              <Plus size={17} />
+            </ActionIcon>
           )}
         </div>
         {conversations.isLoading && <Loader size="sm" m="md" />}
         {conversations.error && (
-          <Alert color="red">{errorText(conversations.error)}</Alert>
+          <Alert color="red">
+            {errorText(conversations.error)}
+            <Button size="xs" onClick={() => void conversations.refetch()}>
+              Повторить
+            </Button>
+          </Alert>
         )}
-        <div className="crm-dialog-list">
-          {conversations.data?.length === 0 && (
+        <div
+          className="crm-dialog-list"
+          ref={list}
+          onScroll={(e) => {
+            captureListAnchor();
+            const el = e.currentTarget;
+            if (
+              el.scrollHeight - el.scrollTop - el.clientHeight < 520 &&
+              conversations.hasNextPage &&
+              !conversations.isFetching
+            )
+              void conversations.fetchNextPage();
+          }}
+        >
+          {!dialogRows.length && !conversations.isLoading && (
             <p className="crm-empty">{t("noDialogs")}</p>
           )}
-          {conversations.data?.map((item) => (
+          {dialogRows.map((item) => (
             <button
               disabled={busy}
               key={item.id}
-              className={
-                "crm-dialog " + (item.id === selected ? "selected" : "")
-              }
+              data-dialog-id={item.id}
+              className={`crm-dialog ${item.id === selected ? "selected" : ""} ${item.state}`}
               onClick={() => choose(item.id)}
+              title={team.data?.find((u) => u.id === item.assignee_id)?.name}
             >
-              <div>
+              <div className="crm-dialog-line">
                 <b>{item.display_name || item.name || item.phone}</b>
-                <small>{time(item.updated_at)}</small>
+                {item.last_has_attachment && (
+                  <Paperclip size={12} aria-label={t("attachment")} />
+                )}
+                <time title={time(item.updated_at)}>
+                  {shortTime(item.updated_at)}
+                </time>
               </div>
-              <p>{item.last_message || t("attachment")}</p>
-              {item.has_ai_draft && (
-                <Badge size="xs" color="violet">
-                  {t("v1:aiDraft")}
-                </Badge>
-              )}
-              {item.assignee_id && (
-                <small
-                  title={
-                    team.data?.find((u) => u.id === item.assignee_id)?.name
-                  }
-                >
-                  {team.data?.find((u) => u.id === item.assignee_id)?.name}
-                </small>
-              )}
-              {item.task_updated && (
-                <Badge size="xs" color="orange">
-                  {taskLabel("taskUpdate")}
-                </Badge>
-              )}
-              <div>
-                <span>{t(item.state)}</span>
-                {item.unread_count > 0 && (
-                  <Badge size="xs">{item.unread_count}</Badge>
+              <div className="crm-dialog-line">
+                <p>{item.last_message || " "}</p>
+                {item.has_ai_draft && (
+                  <Badge size="xs" color="violet" title={t("v1:aiDraft")}>
+                    AI
+                  </Badge>
+                )}
+                {item.task_updated && (
+                  <Badge
+                    size="xs"
+                    color="orange"
+                    title={taskLabel("taskUpdate")}
+                  >
+                    •
+                  </Badge>
                 )}
                 {item.needs_human && (
-                  <Badge color="orange" size="xs">
-                    {t("human")}
+                  <Badge size="xs" color="orange" title={t("human")}>
+                    Человек
                   </Badge>
+                )}
+                {item.unread_count > 0 && (
+                  <Badge size="xs">{item.unread_count}</Badge>
                 )}
               </div>
             </button>
           ))}
-        </div>
-        <div className="crm-pagination">
-          <Button
-            variant="subtle"
-            size="xs"
-            disabled={page === 0}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            ←
-          </Button>
-          <small>{page + 1}</small>
-          <Button
-            variant="subtle"
-            size="xs"
-            disabled={(conversations.data?.length || 0) < 50}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            →
-          </Button>
+          {conversations.isFetchingNextPage && (
+            <div className="crm-list-loading" role="status">
+              <Loader size="xs" />
+            </div>
+          )}
         </div>
       </aside>
       {!selected ? (
@@ -689,7 +1045,23 @@ export function Inbox({ user }: { user: User }) {
         </div>
       ) : (
         <>
-          <section className="crm-thread">
+          <section
+            className="crm-thread"
+            onDragOver={(event) => {
+              if (
+                canWrite &&
+                !busy &&
+                event.dataTransfer.types.includes("Files")
+              )
+                event.preventDefault();
+            }}
+            onDrop={(event) => {
+              if (canWrite && !busy && event.dataTransfer.files.length) {
+                event.preventDefault();
+                attachFile(event.dataTransfer.files[0]);
+              }
+            }}
+          >
             <header className="crm-thread-header">
               <Button
                 className="crm-back"
@@ -704,15 +1076,43 @@ export function Inbox({ user }: { user: User }) {
                 <b>{displayName || t("loading")}</b>
                 <small>{c?.phone}</small>
               </div>
-              <Button
-                className="crm-open-card"
-                size="xs"
-                variant="subtle"
-                onClick={() => setCardOpen(true)}
-              >
-                {t("customer")}
-              </Button>
               {c && <Badge variant="light">{t(c.state)}</Badge>}
+              {c?.customer_id && (
+                <TranslationPreferences
+                  key={c.id}
+                  customerId={c.customer_id}
+                  canWrite={canWrite}
+                  original={!!originals[c.id]}
+                  onOriginal={(value) =>
+                    setOriginals((p) => ({ ...p, [c.id]: value }))
+                  }
+                />
+              )}
+
+              <ActionIcon
+                variant="subtle"
+                aria-label={
+                  panelOpen ? "Свернуть карточку" : "Открыть карточку"
+                }
+                title={panelOpen ? "Свернуть карточку" : "Открыть карточку"}
+                onClick={() => {
+                  if (window.innerWidth <= 760) {
+                    setCardOpen(true);
+                    return;
+                  }
+                  setPanelOpen(!panelOpen);
+                  localStorage.setItem(
+                    `crm-customer-panel:${user.id}`,
+                    String(!panelOpen),
+                  );
+                }}
+              >
+                {panelOpen ? (
+                  <PanelRightClose size={18} />
+                ) : (
+                  <PanelRightOpen size={18} />
+                )}
+              </ActionIcon>
             </header>
             {channels.data?.find(
               (ch) => ch.channelId === c?.channel_id && ch.state !== "active",
@@ -720,6 +1120,16 @@ export function Inbox({ user }: { user: User }) {
             {error && !newOpen && (
               <Alert color="red" withCloseButton onClose={() => setError("")}>
                 {error}
+                {sendError && (
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    loading={busy}
+                    onClick={() => void send()}
+                  >
+                    Повторить
+                  </Button>
+                )}
               </Alert>
             )}
             {messages.error && (
@@ -728,7 +1138,22 @@ export function Inbox({ user }: { user: User }) {
             {current.error && (
               <Alert color="red">{errorText(current.error)}</Alert>
             )}
-            <div className="crm-messages" ref={pane}>
+            <div
+              className="crm-messages"
+              ref={pane}
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                stickToBottom.current =
+                  el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+                if (
+                  e.currentTarget.scrollTop < 100 &&
+                  initialScroll.current === selected &&
+                  hasOlder &&
+                  (messages.data?.length || 0) >= 50
+                )
+                  void loadOlder();
+              }}
+            >
               {hasOlder &&
                 ((messages.data?.length || 0) >= 50 || older.length > 0) && (
                   <Button
@@ -740,187 +1165,272 @@ export function Inbox({ user }: { user: User }) {
                     {t("loadOlder")}
                   </Button>
                 )}
-              {allMessages.map((m) => (
-                <article
-                  className={
-                    "crm-message " +
-                    (m.author_type === "system"
-                      ? "system"
-                      : m.is_private_note
-                        ? "private"
-                        : m.direction === "out"
-                          ? "out"
-                          : "in")
-                  }
-                  dir="auto"
-                  key={m.id}
-                >
-                  <div className="crm-message-author">
-                    {m.author_type === "system"
-                      ? taskLabel("system")
-                      : m.is_private_note
-                        ? t("privateNote") +
-                          " · " +
-                          (m.author_name || t(m.author_type))
-                        : m.author_name || t(m.author_type)}
-                    {m.edited && " · " + t("edited")}
-                    {m.deleted && " · " + t("deleted")}
-                  </div>
-                  {m.quoted_text && (
-                    <blockquote dir="auto">
-                      <LinkedText text={m.quoted_text} />
-                    </blockquote>
-                  )}
-                  {m.content?.map_url && (
-                    <a
-                      href={m.content.map_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {t("v1:map")}
-                    </a>
-                  )}
-                  {m.kind === "vcard" && (
-                    <div>
-                      <b>{m.content?.name || t("v1:contact")}</b>
-                      {m.content?.phones?.map((p) => (
-                        <p key={p}>{p}</p>
-                      ))}
+              {allMessages.map((m, index) => (
+                <Fragment key={m.id}>
+                  {(index === 0 ||
+                    dayKey(m.created_at) !==
+                      dayKey(allMessages[index - 1].created_at)) && (
+                    <div className="crm-date-separator">
+                      {dayLabel(m.created_at)}
                     </div>
                   )}
-                  {m.deleted && <p>Сообщение удалено</p>}
-                  {m.task_id && (
-                    <a
-                      href={"/tasks/T-" + m.task_number}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        openTask(m.task_id!);
-                      }}
-                    >
-                      Открыть задачу T-{m.task_number}
-                    </a>
-                  )}
-                  {m.text &&
-                    (m.kind !== "vcard" || !m.content?.phones?.length) && (
-                      <div className="crm-message-text">
-                        <LinkedText
-                          text={
-                            !originals[selected] &&
-                            m.translation?.state === "ready"
-                              ? m.translation.text || m.text
-                              : m.text
-                          }
-                        />
-                      </div>
+                  <article
+                    className={
+                      "crm-message " +
+                      (index > 0 &&
+                      allMessages[index - 1].author_id === m.author_id &&
+                      allMessages[index - 1].direction === m.direction &&
+                      allMessages[index - 1].author_type === m.author_type
+                        ? "same-author "
+                        : "") +
+                      (m.author_type === "system"
+                        ? "system"
+                        : m.is_private_note
+                          ? "private"
+                          : m.direction === "out"
+                            ? "out"
+                            : "in")
+                    }
+                    dir="auto"
+                    key={m.id}
+                  >
+                    {m.quoted_text && (
+                      <blockquote dir="auto">
+                        <LinkedText text={m.quoted_text} />
+                      </blockquote>
                     )}
-                  {!originals[selected] && m.translation && !m.deleted && (
-                    <div className="crm-translation-status">
-                      {m.translation.state === "ready"
-                        ? `Перевод · ${m.translation.source} → ${m.translation.target}`
-                        : m.translation.error === "not_configured"
-                          ? "Для перевода настройте ключ OpenAI. Показан оригинал."
-                          : m.translation.state === "error"
-                            ? "Перевод недоступен. Показан оригинал."
-                            : "Перевод готовится… Показан оригинал."}
-                      {m.translation.state === "error" && canWrite && (
-                        <button
-                          onClick={() =>
-                            void api(
-                              "/api/messages/" + m.id + "/translation/retry",
-                              "POST",
-                            )
-                              .then(refresh)
-                              .catch((e) => setError(errorText(e)))
-                          }
-                        >
-                          Повторить перевод
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {!!m.history?.length && (
-                    <details>
-                      <summary>{t("v1:previousVersions")}</summary>
-                      {m.history.map((v, i) => (
-                        <p key={i}>
-                          <LinkedText text={v.body} />
-                        </p>
-                      ))}
-                    </details>
-                  )}
-                  {m.attachment_url && (
-                    <div className="crm-attachment">
-                      {m.attachment_mime?.startsWith("image/") &&
-                      m.attachment_mime !== "image/svg+xml" ? (
-                        <a
-                          href={m.attachment_url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <img
-                            loading="lazy"
-                            src={m.attachment_url}
-                            alt={m.attachment_name || t("attachment")}
-                          />
-                        </a>
-                      ) : m.attachment_mime?.startsWith("audio/") ? (
-                        <audio controls preload="none" src={m.attachment_url} />
-                      ) : m.attachment_mime?.startsWith("video/") ? (
-                        <video controls preload="none" src={m.attachment_url} />
-                      ) : null}
+                    {m.content?.map_url && (
                       <a
-                        href={m.attachment_url}
+                        href={m.content.map_url}
                         target="_blank"
                         rel="noreferrer"
                       >
-                        {m.attachment_name || t("attachment")}
+                        {t("v1:map")}
                       </a>
-                    </div>
-                  )}
-                  {m.kind === "missing_call" && <p>{t("missedCall")}</p>}
-                  {m.error_text && (
-                    <p className="crm-message-error">{m.error_text}</p>
-                  )}
-                  <footer>
-                    <time>{time(m.created_at)}</time>
-                    <span>
-                      {m.status === "translating"
-                        ? "Ожидает перевода"
-                        : t("status_" + m.status, { defaultValue: m.status })}
-                    </span>
-                    {canWrite &&
-                      !m.is_private_note &&
-                      !m.deleted &&
-                      m.external &&
-                      m.author_type !== "system" && (
-                        <button onClick={() => setQuoted(m)}>Ответить</button>
+                    )}
+                    {m.kind === "vcard" && (
+                      <div>
+                        <b>{m.content?.name || t("v1:contact")}</b>
+                        {m.content?.phones?.map((p) => (
+                          <p key={p}>{p}</p>
+                        ))}
+                      </div>
+                    )}
+                    {m.deleted && <p>Сообщение удалено</p>}
+                    {m.task_id && (
+                      <a
+                        href={"/tasks/T-" + m.task_number}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          openTask(m.task_id!);
+                        }}
+                      >
+                        Открыть задачу T-{m.task_number}
+                      </a>
+                    )}
+                    {m.text &&
+                      (m.kind !== "vcard" || !m.content?.phones?.length) && (
+                        <div className="crm-message-text">
+                          <LinkedText
+                            text={
+                              m.direction === "out"
+                                ? (m.delivery_text ?? m.text)
+                                : m.text
+                            }
+                          />
+                        </div>
                       )}
-                    {canWrite &&
-                      ["error", "uncertain"].includes(m.status) &&
-                      m.author_type === "user" && (
-                        <button onClick={() => void retry(m)}>
-                          {t("retry")}
-                        </button>
+                    {!originals[selected] &&
+                      m.reading_translation?.state === "ready" &&
+                      m.reading_translation.text &&
+                      m.reading_translation.text !==
+                        (m.direction === "out"
+                          ? (m.delivery_text ?? m.text)
+                          : m.text) && (
+                        <div className="crm-manager-version" dir="auto">
+                          <LinkedText text={m.reading_translation.text} />
+                        </div>
                       )}
-                  </footer>
-                  {canWrite && (
-                    <MessageActions
-                      message={m}
-                      user={user}
-                      onChanged={refresh}
-                    />
-                  )}
-                </article>
+                    {!originals[selected] &&
+                      m.reading_translation &&
+                      m.reading_translation.state !== "ready" &&
+                      !m.deleted && (
+                        <div className="crm-translation-status">
+                          {m.reading_translation.state === "error"
+                            ? "Перевод недоступен. Показан оригинал."
+                            : "Перевод готовится…"}
+                          {m.reading_translation.state === "error" &&
+                            canWrite && (
+                              <button
+                                onClick={() =>
+                                  void api(
+                                    "/api/messages/" +
+                                      m.id +
+                                      "/translation/retry",
+                                    "POST",
+                                  )
+                                    .then(refresh)
+                                    .catch((e) => setError(errorText(e)))
+                                }
+                              >
+                                Повторить перевод
+                              </button>
+                            )}
+                        </div>
+                      )}
+                    {!!m.history?.length && (
+                      <details>
+                        <summary>{t("v1:previousVersions")}</summary>
+                        {m.history.map((v, i) => (
+                          <p key={i}>
+                            <LinkedText text={v.body} />
+                          </p>
+                        ))}
+                      </details>
+                    )}
+                    {m.attachment_url && (
+                      <div className="crm-attachment">
+                        {m.attachment_mime?.startsWith("image/") &&
+                        m.attachment_mime !== "image/svg+xml" ? (
+                          <a
+                            href={m.attachment_url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <img
+                              loading="lazy"
+                              src={m.attachment_url}
+                              alt={m.attachment_name || t("attachment")}
+                            />
+                          </a>
+                        ) : m.attachment_mime?.startsWith("audio/") ? (
+                          <audio
+                            controls
+                            preload="none"
+                            src={m.attachment_url}
+                          />
+                        ) : m.attachment_mime?.startsWith("video/") ? (
+                          <video
+                            controls
+                            preload="none"
+                            src={m.attachment_url}
+                          />
+                        ) : null}
+                        {(!m.attachment_mime?.startsWith("image/") ||
+                          m.attachment_mime === "image/svg+xml") && (
+                          <a
+                            href={m.attachment_url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <Paperclip size={12} />{" "}
+                            {m.attachment_name || t("attachment")}
+                          </a>
+                        )}
+                      </div>
+                    )}
+                    {m.kind === "missing_call" && <p>{t("missedCall")}</p>}
+                    {m.error_text && (
+                      <p className="crm-message-error">{m.error_text}</p>
+                    )}
+                    <footer>
+                      {(m.direction === "out" ||
+                        m.is_private_note ||
+                        m.author_type === "system") && (
+                        <span className="crm-message-author">
+                          {m.is_private_note ? t("privateNote") + " · " : ""}
+                          {m.author_name ||
+                            (m.author_type === "system"
+                              ? taskLabel("system")
+                              : t(m.author_type))}
+                        </span>
+                      )}
+                      {m.edited && <span>{t("edited")}</span>}
+                      <time title={time(m.created_at)}>
+                        {clockTime(m.created_at)}
+                      </time>
+                      {m.direction === "out" && (
+                        <span>
+                          {m.status === "translating"
+                            ? "Ожидает перевода"
+                            : t("status_" + m.status, {
+                                defaultValue: m.status,
+                              })}
+                        </span>
+                      )}
+                      {canWrite &&
+                        ["error", "uncertain"].includes(m.status) &&
+                        m.author_type === "user" && (
+                          <button onClick={() => void retry(m)}>
+                            {t("retry")}
+                          </button>
+                        )}
+                      {canWrite && (
+                        <MessageActions
+                          message={m}
+                          user={user}
+                          onChanged={refresh}
+                          onReply={() => setQuoted(m)}
+                        />
+                      )}
+                    </footer>
+                  </article>
+                </Fragment>
               ))}
               <div ref={end} />
             </div>
-            <DraftPanel
-              key={selected}
-              conversationId={selected}
-              canWrite={canWrite}
-            />
+            <div className="crm-assistant-row">
+              <DraftPanel
+                key={selected}
+                conversationId={selected}
+                canWrite={canWrite}
+                isAdmin={user.role === "admin"}
+                managerLanguage={ownLanguage}
+                clientLanguage={c?.translation?.translation_client_language}
+                onEdit={(id, text, source, target) => {
+                  if (selectedRef.current !== selected) return;
+                  setEditingDraft(id);
+                  setMessage(text);
+                  setSourceLanguage(source);
+                  setSendLanguage(target);
+                  setNote(false);
+                  setSendId(crypto.randomUUID());
+                  requestAnimationFrame(() =>
+                    document
+                      .querySelector<HTMLTextAreaElement>(
+                        ".crm-editor textarea",
+                      )
+                      ?.focus(),
+                  );
+                }}
+              />
+              {canWrite && c && (
+                <QuickReplyPicker
+                  key={c.id}
+                  conversation={c}
+                  text={message}
+                  onInsert={setMessage}
+                />
+              )}
+            </div>
             {canWrite ? (
-              <div className="crm-composer">
+              <div className={"crm-composer " + (note ? "is-note" : "")}>
+                {editingDraft && (
+                  <div className="crm-file-preview">
+                    <span>
+                      Правка AI-черновика · {languageName(sourceLanguage)}
+                    </span>
+                    <ActionIcon
+                      size={18}
+                      variant="subtle"
+                      title="Продолжить как обычный ответ"
+                      aria-label="Отменить связь с AI-черновиком"
+                      onClick={() => setEditingDraft(null)}
+                    >
+                      <X size={13} />
+                    </ActionIcon>
+                  </div>
+                )}
                 {quoted && (
                   <div className="crm-quote-preview">
                     <span>{quoted.text.slice(0, 150) || t("attachment")}</span>
@@ -932,70 +1442,99 @@ export function Inbox({ user }: { user: User }) {
                     </button>
                   </div>
                 )}
-                {c && (
-                  <QuickReplyPicker
-                    key={c.id}
-                    conversation={c}
-                    text={message}
-                    onInsert={setMessage}
-                  />
+                {file && (
+                  <div className="crm-file-preview">
+                    <Paperclip size={12} />
+                    <span>{file.name}</span>
+                    <ActionIcon
+                      size={18}
+                      variant="subtle"
+                      aria-label="Убрать файл"
+                      disabled={busy}
+                      onClick={() => attachFile(null)}
+                    >
+                      <X size={13} />
+                    </ActionIcon>
+                  </div>
                 )}
-                <Textarea
-                  aria-label={t("message")}
-                  placeholder={note ? t("noteHint") : t("messageHint")}
-                  value={message}
-                  onChange={(e) => setMessage(e.currentTarget.value)}
-                  autosize
-                  minRows={2}
-                  maxRows={6}
-                  maxLength={10000}
-                  dir="auto"
-                  disabled={busy}
-                  onKeyDown={(e) => {
-                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                      e.preventDefault();
-                      void send();
-                    }
-                  }}
-                />
-                <div className="crm-compose-actions">
-                  <FileInput
-                    aria-label={t("attach")}
-                    placeholder={t("attach")}
-                    value={file}
-                    onChange={(value) => {
-                      if (value && value.size > 10 * 1024 * 1024) {
-                        setError(t("fileLimit"));
-                        return;
-                      }
-                      setFile(value);
-                      setAttachment(null);
-                    }}
-                    clearable
+                <div className="crm-editor">
+                  <Textarea
+                    aria-label={t("message")}
+                    placeholder={note ? t("noteHint") : t("messageHint")}
+                    value={message}
+                    onChange={(event) => setMessage(event.currentTarget.value)}
+                    autosize
+                    minRows={1}
+                    maxRows={7}
+                    maxLength={10000}
+                    dir="auto"
                     disabled={busy}
-                    size="xs"
+                    onPaste={(event) => {
+                      const image = Array.from(event.clipboardData.items)
+                        .find(
+                          (item) =>
+                            item.kind === "file" &&
+                            item.type.startsWith("image/"),
+                        )
+                        ?.getAsFile();
+                      if (image) {
+                        event.preventDefault();
+                        attachFile(image);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        (event.ctrlKey || event.metaKey) &&
+                        event.key === "Enter"
+                      ) {
+                        event.preventDefault();
+                        void send();
+                      }
+                    }}
                   />
+                  <FileButton onChange={attachFile}>
+                    {(props) => (
+                      <ActionIcon
+                        {...props}
+                        className="crm-attach-button"
+                        variant="subtle"
+                        disabled={busy}
+                        title={t("composeHint")}
+                        aria-label={t("attach")}
+                      >
+                        <Paperclip size={18} />
+                      </ActionIcon>
+                    )}
+                  </FileButton>
+                </div>
+                <div className="crm-compose-actions">
                   <Checkbox
                     size="xs"
-                    label={t("privateNote")}
+                    title={t("privateNote")}
+                    aria-label={t("privateNote")}
+                    label={
+                      <>
+                        <StickyNote size={15} />
+                        <span className="crm-action-label">
+                          {t("privateNote")}
+                        </span>
+                      </>
+                    }
                     checked={note}
-                    onChange={(e) => setNote(e.currentTarget.checked)}
+                    onChange={(event) => setNote(event.currentTarget.checked)}
                     disabled={busy}
                   />
-                  <Button
-                    loading={busy}
-                    disabled={!message.trim() && !file}
-                    onClick={() => void send()}
-                  >
-                    {note ? t("saveNote") : t("send")}
-                  </Button>
-                </div>
-                <div className="crm-compose-followup">
                   {c && c.inbound_seq > 0 && (
                     <Button
                       size="xs"
-                      variant="light"
+                      variant="subtle"
                       color={c.unread_count ? "teal" : "orange"}
+                      title={
+                        c.unread_count ? "Не требует ответа" : "Требует ответа"
+                      }
+                      aria-label={
+                        c.unread_count ? "Не требует ответа" : "Требует ответа"
+                      }
                       disabled={busy}
                       onClick={() =>
                         void api(
@@ -1013,26 +1552,75 @@ export function Inbox({ user }: { user: User }) {
                           })
                       }
                     >
-                      {c.unread_count ? "Не требует ответа" : "Требует ответа"}
+                      <CheckCheck size={15} />
+                      <span className="crm-action-label">
+                        {c.unread_count
+                          ? "Не требует ответа"
+                          : "Требует ответа"}
+                      </span>
                     </Button>
                   )}
                   {c && (
                     <Button
                       size="xs"
-                      variant="default"
+                      variant="subtle"
+                      title="Создать задачу"
+                      aria-label="Создать задачу"
                       onClick={() => createTask(c)}
                     >
-                      Создать задачу
+                      <ListTodo size={15} />
+                      <span className="crm-action-label">Создать задачу</span>
                     </Button>
                   )}
+                  <div className="crm-send-group">
+                    <Button
+                      className="crm-send"
+                      size="xs"
+                      loading={busy}
+                      title={t("composeHint")}
+                      disabled={!message.trim() && !file}
+                      onClick={() => void send()}
+                    >
+                      <Send size={14} />
+                      <span>
+                        {note ? t("saveNote") : t("send")}
+                        {!note &&
+                        (sendLanguage ||
+                          editingDraft ||
+                          c?.translation?.translate_outgoing)
+                          ? " · " +
+                            languageName(
+                              sendLanguage === "original"
+                                ? sourceLanguage
+                                : sendLanguage ||
+                                    c?.translation
+                                      ?.translation_client_language ||
+                                    sourceLanguage,
+                            )
+                          : ""}
+                      </span>
+                    </Button>
+                    {!note && (
+                      <SendLanguageMenu
+                        value={sendLanguage}
+                        onChange={setSendLanguage}
+                        managerLanguage={sourceLanguage}
+                        clientLanguage={
+                          editingDraft || c?.translation?.translate_outgoing
+                            ? c?.translation?.translation_client_language
+                            : sourceLanguage
+                        }
+                        disabled={busy}
+                      />
+                    )}
+                  </div>
                 </div>
-                <small className="crm-compose-hint">{t("composeHint")}</small>
               </div>
             ) : (
               <p className="crm-empty">{t("readOnly")}</p>
             )}
           </section>
-          <aside className="crm-customer">{customerCard}</aside>
+          {panelOpen && <aside className="crm-customer">{customerCard}</aside>}
           <Modal
             opened={cardOpen}
             onClose={() => setCardOpen(false)}
@@ -1068,20 +1656,29 @@ export function Inbox({ user }: { user: User }) {
           onChange={(e) => setPhone(e.currentTarget.value)}
           required
         />
-        <Select
-          mt="sm"
-          label={t("country")}
-          value={country}
-          onChange={(v) => setCountry(v || "RU")}
-          data={[
-            { value: "RU", label: "Россия +7" },
-            { value: "KR", label: "대한민국 +82" },
-            { value: "US", label: "United States +1" },
-            { value: "GB", label: "United Kingdom +44" },
-            { value: "AE", label: "الإمارات +971" },
-          ]}
-        />
-        <small className="crm-muted">{t("countryHint")}</small>
+        {!phone.trim().startsWith("+") && (
+          <>
+            {" "}
+            <Select
+              mt="sm"
+              label={t("country")}
+              value={country}
+              onChange={(value) => {
+                const next = value || "RU";
+                setCountry(next);
+                localStorage.setItem(`crm-dialog-country:${user.id}`, next);
+              }}
+              data={[
+                { value: "RU", label: "Россия +7" },
+                { value: "KR", label: "대한민국 +82" },
+                { value: "US", label: "United States +1" },
+                { value: "GB", label: "United Kingdom +44" },
+                { value: "AE", label: "الإمارات +971" },
+              ]}
+            />
+            <small className="crm-muted">{t("countryHint")}</small>
+          </>
+        )}
         <TextInput
           mt="sm"
           label={t("name")}

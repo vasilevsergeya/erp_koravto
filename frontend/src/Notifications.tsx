@@ -169,13 +169,13 @@ export function PersonalNotifications() {
               onChange={(e) => void change("telegram", e.currentTarget.checked)}
             />
             <Checkbox
-              label="Уведомления браузера о новых сообщениях"
+              label="Уведомления браузера о задачах и эскалациях"
               checked={data.data.preferences.browser}
               disabled={busy}
               onChange={(e) => void change("browser", e.currentTarget.checked)}
             />
             <Checkbox
-              label="Звук новых сообщений"
+              label="Звук уведомлений о задачах и эскалациях"
               checked={data.data.preferences.sound}
               disabled={busy}
               onChange={(e) => void change("sound", e.currentTarget.checked)}
@@ -323,7 +323,7 @@ export function NotificationEvents() {
       (n) =>
         !seen.current!.has(n.id) &&
         new Date(n.created_at).getTime() >= started.current &&
-        n.kind === "inbox.message",
+        n.kind !== "inbox.message",
     );
     for (const n of items) seen.current.add(n.id);
     if (seen.current.size > 1000)
@@ -343,10 +343,13 @@ export function NotificationEvents() {
       document.hidden
     ) {
       for (const item of fresh.slice(0, 3)) {
-        const n = new Notification("KORAVTO · Новое сообщение", {
-          body: "Откройте диалог в CRM",
-          tag: item.id,
-        });
+        const n = new Notification(
+          "KORAVTO · " + (item.payload.title || "Уведомление"),
+          {
+            body: "Откройте уведомления в CRM",
+            tag: item.id,
+          },
+        );
         n.onclick = () => {
           window.focus();
           if (item.payload.conversation_id)
