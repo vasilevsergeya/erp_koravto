@@ -478,7 +478,13 @@ async def process_draft(ctx, draft_id):
             db.commit()
             return
         key = get_setting(db, "openai.api_key", "")
-        if not cfg.enabled or conversation.ai_mode == "off" or not key or conversation.needs_human:
+        manual_requested = draft.policy.get("manual_requested", False)
+        if (
+            not cfg.enabled
+            or conversation.ai_mode == "off"
+            or not key
+            or (conversation.needs_human and not manual_requested)
+        ):
             draft.state = (
                 "disabled"
                 if not cfg.enabled or conversation.ai_mode == "off"
@@ -541,6 +547,8 @@ async def process_draft(ctx, draft_id):
         policy = policy_check(
             cfg, classified.model_copy(update={"language": answer["language"]}), answer, calls
         )
+        # Keep the manager's request across generation/retries and later flag changes.
+        policy["manual_requested"] = manual_requested
         if answer.get("greeting_corrected"):
             policy["reasons"] = list(dict.fromkeys([*policy["reasons"], "greeting_name_mismatch"]))
             policy["passed"] = False
@@ -585,6 +593,8 @@ async def process_draft(ctx, draft_id):
             row.updated_at = now()
             row.lease_until = None
             row.mode = applied_mode(live, classified.intent, conversation, now())
+            if manual_requested and row.mode != "off":
+                row.mode = "draft"
             if row.mode == "off":
                 row.state = "off"
                 row.body = ""
@@ -693,6 +703,7 @@ def auto_allowed(db, draft, conversation):
         return False
     if (
         conversation.needs_human
+        or draft.policy.get("manual_requested", False)
         or not current(db, draft, conversation)
         or applied_mode(cfg, draft.intent, conversation, now()) != "auto"
     ):

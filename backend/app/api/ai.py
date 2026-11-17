@@ -259,8 +259,6 @@ def regenerate(conversation_id: str, user=Depends(writer), db: Session = Depends
         raise HTTPException(400, "Нет входящего сообщения")
     if not get_setting(db, "openai.api_key", ""):
         raise HTTPException(400, "Ключ OpenAI не настроен")
-    if conversation.needs_human:
-        raise HTTPException(409, "Сначала снимите флаг «Нужен человек»")
     if not settings(db).enabled or conversation.ai_mode == "off":
         raise HTTPException(409, "AI выключен")
     supersede(db, conversation_id, "regenerated")
@@ -272,6 +270,7 @@ def regenerate(conversation_id: str, user=Depends(writer), db: Session = Depends
         inbound_id=inbound.id,
         generation=generation,
         source_hash=source_hash(inbound),
+        policy={"manual_requested": True},
     )
     db.add(row)
     db.commit()

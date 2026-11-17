@@ -279,6 +279,83 @@ class AIAcceptance(unittest.TestCase):
         with SessionLocal() as db:
             self.assertEqual(len(db.get(ApprovedExample, example).embedding), 1536)
 
+    def test_manual_regeneration_with_human_flag_requires_manager_send(self):
+        self.configure(modes={**self.cfg.modes, "shipping": ["auto", "auto"]})
+        with SessionLocal() as db:
+            db.get(Conversation, self.cid).needs_human = True
+            db.commit()
+        response = self.client.post("/api/conversations/" + self.cid + "/draft/regenerate")
+        self.assertEqual(response.status_code, 201, response.text)
+        previous_id, self.did = self.did, response.json()["id"]
+        row = self.generate()
+        self.assertEqual(row.state, "ready")
+        self.assertTrue(row.body)
+        self.assertEqual(row.mode, "draft")
+        self.assertTrue(row.policy["manual_requested"])
+        self.assertIsNone(row.auto_at)
+        with SessionLocal() as db:
+            c = db.get(Conversation, self.cid)
+            d = db.get(AIDraft, self.did)
+            self.assertTrue(c.needs_human)
+            self.assertEqual(db.get(AIDraft, previous_id).decision, "superseded")
+            self.assertFalse(auto_allowed(db, d, c))
+            # Removing the flag must not turn a manager-requested suggestion into an auto reply.
+            c.needs_human = False
+            self.assertFalse(auto_allowed(db, d, c))
+            d.auto_at = now() - timedelta(seconds=1)
+            db.commit()
+        queue_auto()
+        with SessionLocal() as db:
+            d = db.get(AIDraft, self.did)
+            self.assertEqual(d.decision, "pending")
+            self.assertIsNone(d.message_id)
+            self.assertIsNone(d.auto_at)
+            db.get(Conversation, self.cid).needs_human = True
+            db.commit()
+        sent = self.client.post("/api/drafts/" + self.did + "/send", json={})
+        self.assertEqual(sent.status_code, 200, sent.text)
+        with SessionLocal() as db:
+            self.assertTrue(db.get(Conversation, self.cid).needs_human)
+            self.assertEqual(db.get(AIDraft, self.did).decided_by, self.user)
+
+    def test_manual_regeneration_without_human_flag_stays_manual(self):
+        self.configure(modes={**self.cfg.modes, "shipping": ["auto", "auto"]})
+        response = self.client.post("/api/conversations/" + self.cid + "/draft/regenerate")
+        self.assertEqual(response.status_code, 201, response.text)
+        self.did = response.json()["id"]
+        row = self.generate()
+        self.assertEqual(row.state, "ready")
+        self.assertEqual(row.mode, "draft")
+        self.assertIsNone(row.auto_at)
+        with SessionLocal() as db:
+            self.assertFalse(auto_allowed(db, row, db.get(Conversation, self.cid)))
+
+    def test_human_flag_still_blocks_background_generation(self):
+        with SessionLocal() as db:
+            db.get(Conversation, self.cid).needs_human = True
+            db.commit()
+        with patch.object(OpenAIAdapter, "response", AsyncMock()) as response:
+            asyncio.run(process_draft({}, self.did))
+        response.assert_not_called()
+        with SessionLocal() as db:
+            row = db.get(AIDraft, self.did)
+            self.assertEqual(row.state, "escalated")
+            self.assertFalse(row.body)
+            self.assertIsNone(row.auto_at)
+
+    def test_manual_regeneration_respects_disabled_ai(self):
+        for global_off in (True, False):
+            with self.subTest(global_off=global_off):
+                self.configure(enabled=not global_off)
+                with SessionLocal() as db:
+                    c = db.get(Conversation, self.cid)
+                    c.needs_human = True
+                    c.ai_mode = "default" if global_off else "off"
+                    db.commit()
+                response = self.client.post("/api/conversations/" + self.cid + "/draft/regenerate")
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()["detail"], "AI выключен")
+
     def test_escalation_and_no_stock_facts_never_auto(self):
         self.configure(modes={**self.cfg.modes, "order_status": ["auto", "auto"]})
         row = self.generate("order_status")
