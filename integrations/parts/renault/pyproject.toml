@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "renaultkorean-epc-api"
+version = "0.1.0"
+description = "Python HTTP API and requests-based Renault Korea EPC client"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn==0.52.4",
+  "requests[socks]==2.34.2",
+  "beautifulsoup4==4.15.0",
+  "json5==0.12.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "httpx==0.28.1", "ruff==0.16.6"]
+
+[project.scripts]
+epc-api = "epc_api.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["epc_api*"]
+
+[tool.setuptools.package-data]
+epc_api = ["profiles/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [".local"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

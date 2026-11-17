@@ -1,0 +1,51 @@
+{
+  "search": {
+    "url": "/PROGS/PCHS1020.aspx?lang=en",
+    "method": "POST",
+    "direct_method": "fnSearchClick",
+    "params": {
+      "vFrom": "", "P_CARCOD": "", "SEARCH_TYPE": "PARTNO", "SEARCH_VALUE": "{part_number}"
+    },
+    "fields": {"cb_CARCOD": "", "cb_search_type": "PARTNO", "tb_search": "{part_number}"}
+  },
+  "search_rows": {"kind": "ext_store", "selector": "App.cph_main_Store1"},
+  "details": [
+    {
+      "name": "details",
+      "url": "/PROGS/PCHS2020.aspx?lang=en&CAR_CD={row.CARCOD}&SEC_NO={row.SECNO}&PART_CD={row.PARTCD}&PART_NO={part_number}&VIN_NO=",
+      "method": "POST", "direct_method": "fnPageAfterRender",
+      "params": {
+        "P_CARCOD": "{row.CARCOD}", "P_SECNO": "{row.SECNO}", "P_PARTCD": "{row.PARTCD}",
+        "P_PARTNO": "{part_number}", "P_VIN_NO": ""
+      },
+      "capture": {"kind": "ext_store", "selector": "App.cph_main_Store_Part_History"}
+    },
+    {
+      "name": "applied",
+      "url": "/PROGS/PCHS2020.aspx?lang=en&CAR_CD={row.CARCOD}&SEC_NO={row.SECNO}&PART_CD={details.PARTCD}&PART_NO={part_number}&VIN_NO=",
+      "method": "POST", "direct_method": "Get_Applied_Catalog_Section_Info",
+      "params": {"P_PARTCD": "{details.PARTCD}", "P_PARTNO": "{part_number}"}
+    }
+  ],
+  "result": {
+    "general": {
+      "response": "details", "kind": "ext_store", "selector": "App.cph_main_Store_Part_History",
+      "columns": {
+        "part_number": "PARTNO", "english_name": "ENGNAM", "weight": "PKWEIT",
+        "volume": "PKBULK", "price": "SALPRC"
+      }
+    },
+    "history": {
+      "response": "details", "kind": "ext_store", "selector": "App.cph_main_Store_Part_History",
+      "columns": {"part_number": "PARTNO", "adopted": "PLADOP"}
+    },
+    "stock": {
+      "response": "applied", "kind": "ext_store", "selector": "App.cph_main_store_supply_center",
+      "columns": {"stock": "1"}
+    },
+    "cars": {
+      "response": "applied", "kind": "ext_store", "selector": "App.cph_main_Store_Applied_Catalog_Section",
+      "columns": {"model": "CARNAM"}
+    }
+  }
+}

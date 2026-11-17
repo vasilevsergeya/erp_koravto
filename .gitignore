@@ -23,3 +23,6 @@ test-results/
 playwright-report/
 .coverage
 *.tsbuildinfo
+
+# Supplier credentials stay on the server, outside version control.
+integrations/parts/**/config.ini

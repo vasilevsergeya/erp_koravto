@@ -41,6 +41,25 @@
             }
         }
     }
+    # Supplier APIs retain their own Basic authentication. Routes precede CRM /api/*.
+    handle_path /api/mobis/* {
+        request_body {
+            max_size 64KB
+        }
+        @mobis_v1 path /v1/*
+        rewrite @mobis_v1 /api{uri}
+        reverse_proxy mobis:8000
+    }
+    # Compatibility with existing Mobis integrations: only change the host to ERP HTTPS.
+    handle /api/v1/parts/* {
+        reverse_proxy mobis:8000
+    }
+    handle_path /api/renault/* {
+        request_body {
+            max_size 64KB
+        }
+        reverse_proxy renault:8000
+    }
     handle /api/uploads {
         request_body {
             max_size 11MB

@@ -1,0 +1,122 @@
+# Mobis и Renault API в ERP
+
+Исходники работающих контейнеров сервера API_MOBIS перенесены 17.11.2026.
+Mobis: версия 0.2.0 с параллельными запросами Hyundai/Kia и страницами магазинов.
+Renault: версия 0.1.0 с исправлением сессии EPC. Код находится в
+`integrations/parts/mobis` и `integrations/parts/renault`, тесты — рядом.
+
+## Внешние адреса
+
+| Действие | Метод | URL |
+|---|---|---|
+| Цена Mobis | GET | `https://erp.korean.parts/api/mobis/v1/parts/92101T4200/price` |
+| Магазины Mobis | GET | `https://erp.korean.parts/api/mobis/v1/parts/58310G7A30/stores` |
+| Renault, пакет номеров | POST | `https://erp.korean.parts/api/renault/parts` |
+| Схема Mobis | GET | `https://erp.korean.parts/api/mobis/openapi.json` |
+| Схема Renault | GET | `https://erp.korean.parts/api/renault/openapi.json` |
+
+Авторизация: HTTP Basic, действующие логин и пароль соответствующего старого API.
+Новые API работают через HTTPS. У Mobis сохранены совместимые маршруты
+`https://erp.korean.parts/api/v1/parts/{part_number}/price` и `/stores` —
+в существующей интеграции достаточно заменить `http://77.232.137.242:8000` на
+`https://erp.korean.parts`.
+Старые сервисы на API_MOBIS при переносе не выключаются.
+
+Renault принимает JSON, например:
+
+```json
+{"part_numbers": ["1147112920", "7701207449"]}
+```
+
+До 50 номеров за запрос в текущей конфигурации. Открытие `/parts` методом GET
+не выполняет поиск: нужен POST и `Content-Type: application/json`.
+
+Mobis сохраняет поля `part_number`, `korean_name`, `english_name`,
+`price_HYUNDAI`, `price_KIA`. Цены остаются строками или null как в исходном API.
+Параметр `?brand=HYUNDAI` или `?brand=KIA` ограничивает поиск выбранной маркой.
+Магазины сгруппированы в `brands`, каждый магазин содержит тип, название,
+адрес и телефон. Число магазинов не означает количество деталей на складе.
+
+Renault возвращает `items`: номер, английское название, `weight` в граммах,
+`volume` в см³, `price` в KRW с НДС, `stock`, `compatibility`, `cars`.
+Ошибка внешнего сайта/прокси возвращается как HTTP 502/503/504. Ее нельзя
+трактовать как нулевой остаток. Пустая цена Mobis — null, а не ноль.
+
+## Использование внутри ERP
+
+Сервисы доступны по сети Docker:
+
+- Mobis: `http://mobis:8000/api/v1/parts/{part_number}/price` и `/stores`.
+- Renault: `http://renault:8000/parts`.
+
+Готовый асинхронный клиент: `backend/app/integrations/parts.py`, класс
+`PartsClient`. Он принимает пары логин/пароль отдельно для каждого API;
+методы `mobis_price`, `mobis_stores`, `renault_parts` возвращают исходный JSON.
+Клиент используется через `async with` и сохраняет ошибки HTTP. По умолчанию
+использует внутренние адреса; для внешнего вызова задайте
+`mobis_url="https://erp.korean.parts/api/mobis/v1"` и
+`renault_url="https://erp.korean.parts/api/renault"`.
+
+Автоматические обращения из AI-помощника в этой версии не включены:
+модули и клиент подготовлены для последующего подключения к его инструментам.
+
+## Настройки и запуск
+
+Реальные INI-файлы не входят в Git и Docker-образы:
+
+- `data/secrets/parts/mobis.ini` (пользователь/пароль API и прокси).
+- `data/secrets/parts/renault.ini` (API, учетная запись EPC и прокси).
+
+Примеры расположены рядом с исходниками. Файлы читаются UID 10001,
+права 0400; каталог родителя на хосте закрыт для других пользователей.
+Для Mobis буквальный `%` внутри INI необходимо записывать как `%%`.
+У Renault используется ConfigParser без интерполяции.
+
+```sh
+cd deploy
+docker compose build mobis renault
+docker compose up -d --no-deps mobis renault
+docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose restart caddy
+```
+
+Маршруты поставщиков должны стоять в Caddyfile перед общим `/api/*` CRM.
+Порты контейнеров не опубликованы на хосте; внешний доступ — через Caddy 443.
+Каждый сервис ограничен 128 MiB и 0.5 CPU, имеет healthcheck и автоперезапуск.
+Один процесс на сервис сохраняет общую ротацию/блокировки прокси.
+Запросы к источникам выполняются по действующим прокси. Их настройки и лимиты
+общие со старым сервером до отключения его клиентских интеграций.
+
+Проверки процесса: `/api/mobis/health`, `/api/renault/health/live`.
+Renault `/api/renault/health/ready` с Basic проверяет настройки, а не доступность EPC.
+Доступность источников проверяется реальными запросами поиска.
+
+## Обновление и откат
+
+Версия образов задается `PARTS_RELEASE` (по умолчанию `current`), независимо от
+`CRM_RELEASE`. Перед обновлением сохраните текущие теги образов и INI-файлы
+в закрытой резервной копии. Секреты не входят в обычную резервную копию БД
+и вложений ERP; для восстановления их нужно сохранить отдельно.
+
+Для отката этой миграции: восстановить прежний Caddyfile, проверить его,
+перезапустить только Caddy, затем остановить `mobis` и `renault`.
+CRM и старый сервер API_MOBIS продолжают работать. Для отката версии модулей
+выберите прежний `PARTS_RELEASE` и пересоздайте только эти два сервиса.
+
+Тесты запускаются отдельно из каталогов каждого модуля (`python -m pytest`),
+а тест клиента — из `backend`: `python -m pytest tests/test_parts_client.py`.
+
+## Проверка развертывания 17.11.2026
+
+- Mobis: 48 тестов; Renault: 77 тестов; клиент ERP: 2 теста.
+- Проверены конфигурации Compose и Caddy, проверки состояния обоих контейнеров.
+- Запросы выполнены с другого сервера через публичный HTTPS домен ERP с действующими учетными данными.
+- Mobis `58310G7A30`: `price_HYUNDAI="99000"`, 11 магазинов Hyundai, 0 Kia.
+- Mobis `92101T4200`: цены null на старом и новом адресах.
+- Renault `1147112920`: 1100 KRW, остаток 688; `7701207449`: 28600 KRW, остаток 923.
+- Совместимый Mobis URL `/api/v1/parts/...` проверен. Без авторизации оба API возвращают 401.
+- OpenAPI Renault указывает внешний префикс `/api/renault`.
+- Проверка `/health` CRM: БД, Redis и worker отвечают успешно.
+
+Это результаты на момент проверки; цены, остатки и магазины запрашиваются заново
+и могут измениться. AI-помощник еще не вызывает эти API автоматически.

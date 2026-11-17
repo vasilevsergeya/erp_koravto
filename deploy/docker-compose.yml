@@ -86,6 +86,46 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
     networks: [backend]
+  mobis:
+    <<: *common
+    image: koravto-crm-mobis:${PARTS_RELEASE:-current}
+    build: ../integrations/parts/mobis
+    mem_limit: 128m
+    cpus: 0.5
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    volumes:
+      - ../data/secrets/parts/mobis.ini:/run/config/mobis.ini:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [frontend, backend]
+  renault:
+    <<: *common
+    image: koravto-crm-renault:${PARTS_RELEASE:-current}
+    build: ../integrations/parts/renault
+    environment:
+      EPC_PUBLIC_PREFIX: /api/renault
+    mem_limit: 128m
+    cpus: 0.5
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    volumes:
+      - ../data/secrets/parts/renault.ini:/run/config/renault.ini:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [frontend, backend]
   web:
     <<: *common
     image: koravto-crm-web:${CRM_RELEASE:-current}
