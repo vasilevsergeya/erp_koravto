@@ -3,18 +3,69 @@
 import asyncio
 import threading
 import unittest
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import HTTPException
 from sqlalchemy.pool import QueuePool
 
+from app.api.ai import Decision, draft, send_draft
 from app.api.auth import COOKIE
-from app.api.inbox import channels
+from app.api.inbox import MessageInput, NewConversation, channels, new_conversation, send
 from app.core.config import config
 from app.main import websocket_updates
 
 
 class WebsocketPoolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bilingual_routes_do_not_block_database_cleanup(self):
+        async def exercise(route, *args):
+            pool = QueuePool(MagicMock, pool_size=1, max_overflow=0, timeout=0.4)
+            held = pool.connect()
+            entered = threading.Event()
+            released = False
+
+            def blocked_lookup(*_args):
+                entered.set()
+                connection = pool.connect()
+                connection.close()
+                raise HTTPException(404, "synthetic lookup complete")
+
+            async def finish_other_request():
+                nonlocal released
+                while not entered.is_set():
+                    await asyncio.sleep(0)
+                held.close()
+                released = True
+
+            db = MagicMock()
+            db.get.side_effect = blocked_lookup
+            release = asyncio.create_task(finish_other_request())
+            try:
+                with self.assertRaises(HTTPException) as error:
+                    await route(*args, user=MagicMock(), db=db)
+                self.assertEqual(error.exception.status_code, 404)
+                self.assertTrue(released, route.__name__)
+            finally:
+                held.close()
+                release.cancel()
+                await asyncio.gather(release, return_exceptions=True)
+                pool.dispose()
+
+        cid = str(uuid.uuid4())
+        cases = [
+            (draft, cid),
+            (send_draft, cid, Decision()),
+            (send, cid, MessageInput(client_id=uuid.uuid4(), text="Hello", source_language="en")),
+            (
+                new_conversation,
+                NewConversation(client_id=uuid.uuid4(), phone="+12025550123", text="Hello"),
+            ),
+        ]
+        for route, *args in cases:
+            with self.subTest(route=route.__name__):
+                await exercise(route, *args)
+
     async def exercise_authorization(self, blocked_call):
         pool = QueuePool(MagicMock, pool_size=1, max_overflow=0, timeout=0.4)
         held = pool.connect()

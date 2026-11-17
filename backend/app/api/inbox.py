@@ -1,3 +1,4 @@
+import asyncio
 import mimetypes
 import uuid
 from datetime import timedelta
@@ -559,6 +560,10 @@ async def translate_before_send(value, source, target):
 async def send(
     conversation_id: str, body: MessageInput, user=Depends(writer), db: Session = Depends(get_db)
 ):
+    return await run_in_threadpool(lambda: asyncio.run(_send(conversation_id, body, user, db)))
+
+
+async def _send(conversation_id, body, user, db):
     prepared = None
     if body.source_language and not body.is_private_note:
         conversation = db.get(Conversation, conversation_id)
@@ -586,6 +591,10 @@ async def send(
 async def new_conversation(
     body: NewConversation, user=Depends(writer), db: Session = Depends(get_db)
 ):
+    return await run_in_threadpool(lambda: asyncio.run(_new_conversation(body, user, db)))
+
+
+async def _new_conversation(body, user, db):
     try:
         parsed = phonenumbers.parse(body.phone, body.country.upper())
         if not phonenumbers.is_valid_number(parsed):
@@ -601,8 +610,10 @@ async def new_conversation(
         enqueue(db, c, body, user)
         return describe_conversation(c, db, user.id)
     channel_id = body.channel_id or get_setting(db, "wazzup.default_channel_id", "")
+    channel_key = get_setting(db, "wazzup.api_key", "")
+    db.rollback()
     try:
-        channels = await WazzupAdapter(get_setting(db, "wazzup.api_key", "")).list_channels()
+        channels = await WazzupAdapter(channel_key).list_channels()
     except IntegrationError as error:
         raise HTTPException(502, "Не удалось проверить каналы Wazzup: " + error.code) from None
     choices = [c for c in channels if c["transport"] == "whatsapp"]

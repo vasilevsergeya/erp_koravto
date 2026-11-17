@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import Literal
 
@@ -5,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.auth import admin_user, current_user, rate_limit
 from app.api.inbox import (
@@ -225,6 +227,11 @@ def activate(prompt_id: str, user=Depends(admin_user), db: Session = Depends(get
 
 @router.get("/conversations/{conversation_id}/draft")
 async def draft(conversation_id: str, user=Depends(current_user), db: Session = Depends(get_db)):
+    # Sync SQLAlchemy may wait for a pool slot; never block the HTTP event loop.
+    return await run_in_threadpool(lambda: asyncio.run(_draft(conversation_id, user, db)))
+
+
+async def _draft(conversation_id, user, db):
     if not db.get(Conversation, conversation_id):
         raise HTTPException(404, "Диалог не найден")
     row = db.scalar(
@@ -287,6 +294,10 @@ class Decision(BaseModel):
 async def send_draft(
     draft_id: str, body: Decision, user=Depends(writer), db: Session = Depends(get_db)
 ):
+    return await run_in_threadpool(lambda: asyncio.run(_send_draft(draft_id, body, user, db)))
+
+
+async def _send_draft(draft_id, body, user, db):
     fingerprint = body.model_dump(exclude={"reason", "category"})
     row = db.get(AIDraft, draft_id)
     if not row:
