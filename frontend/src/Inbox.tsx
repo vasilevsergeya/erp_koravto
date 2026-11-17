@@ -1380,8 +1380,9 @@ export function Inbox({ user }: { user: User }) {
               <div ref={end} />
             </div>
             <div className="crm-assistant-row">
+              {/* Sibling keys must be distinct, including for the same dialog. */}
               <DraftPanel
-                key={selected}
+                key={"draft:" + selected}
                 conversationId={selected}
                 canWrite={canWrite}
                 isAdmin={user.role === "admin"}
@@ -1406,7 +1407,7 @@ export function Inbox({ user }: { user: User }) {
               />
               {canWrite && c && (
                 <QuickReplyPicker
-                  key={c.id}
+                  key={"quick-replies:" + c.id}
                   conversation={c}
                   text={message}
                   onInsert={setMessage}

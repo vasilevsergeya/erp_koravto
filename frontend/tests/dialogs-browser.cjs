@@ -22,6 +22,11 @@ const { chromium } = require("playwright"),
   });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
+  const duplicateKeys = [];
+  page.on("console", (message) => {
+    if (message.text().includes("Encountered two children with the same key"))
+      duplicateKeys.push(message.text());
+  });
   const dialogs = Array.from({ length: 142 }, (_, i) => ({
     id: "dialog-" + i,
     name: "Клиент " + (i + 1),
@@ -143,6 +148,51 @@ const { chromium } = require("playwright"),
   await page.goto(process.env.CRM_TEST_BASE_URL || "http://127.0.0.1:5173/");
   await page.locator('[data-dialog-id="dialog-0"]').click();
   await page.locator(".crm-message").first().waitFor();
+  // Switching both fresh and cached dialogs must unmount the previous assistant.
+  for (const id of [
+    "dialog-0",
+    "dialog-1",
+    "dialog-2",
+    "dialog-0",
+    "dialog-1",
+    "dialog-0",
+  ]) {
+    await page.locator(`[data-dialog-id="${id}"]`).click();
+    await page.waitForFunction(
+      (name) =>
+        document.querySelector(".crm-thread header b")?.textContent === name,
+      dialogs.find((dialog) => dialog.id === id).display_name,
+    );
+    assert.equal(
+      await page.locator(".crm-assistant-row .ai-draft").count(),
+      1,
+      `Only one assistant after opening ${id}`,
+    );
+    assert.equal(
+      await page
+        .locator(".crm-assistant-row .ai-draft-toggle")
+        .getAttribute("aria-controls"),
+      `ai-panel-${id}`,
+    );
+    assert.equal(
+      await page
+        .locator(".crm-assistant-row")
+        .getByRole("button", { name: "Быстрые ответы", exact: true })
+        .count(),
+      1,
+    );
+    await page.keyboard.press("Alt+a");
+    await page.getByRole("region", { name: "Панель AI-помощника" }).waitFor();
+    assert.equal(
+      await page.getByRole("region", { name: "Панель AI-помощника" }).count(),
+      1,
+    );
+    await page.keyboard.press("Escape");
+    await page
+      .getByRole("region", { name: "Панель AI-помощника" })
+      .waitFor({ state: "hidden" });
+  }
+  assert.deepEqual(duplicateKeys, []);
   const metrics = await page.evaluate(() => ({
     width: innerWidth,
     height: innerHeight,
