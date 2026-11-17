@@ -1,0 +1,5 @@
+fastapi==0.141.1
+uvicorn==0.52.4
+requests[socks]==2.34.2
+beautifulsoup4==4.15.0
+json5==0.12.1

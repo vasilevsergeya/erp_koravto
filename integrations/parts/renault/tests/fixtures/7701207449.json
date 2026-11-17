@@ -1,0 +1,10 @@
+{
+  "general": [{
+    "part_number": "7701207449",
+    "english_name": "KIT RETAINER & SEAL-FUEL GAUGE & PUMP SPARE PARTS",
+    "weight": "98", "volume": "2800", "price": "28,600"
+  }],
+  "history": [],
+  "stock": [{"stock": "615"}],
+  "cars": [{"model": "New SM5(L43)"}, {"model": "All-New SM7"}, {"model": "SM6"}, {"model": "SM6"}]
+}

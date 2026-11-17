@@ -1,0 +1,14 @@
+{
+  "general": [{
+    "part_number": "1147112920",
+    "english_name": "GASKET-OIL PUMP,CYLINDER BLOCK",
+    "weight": "1", "volume": ".4", "price": "1,100"
+  }],
+  "history": [
+    {"part_number": "1147112900", "adopted": "1998-01-01"},
+    {"part_number": "1147112910", "adopted": "2001-10-01"},
+    {"part_number": "1147112920", "adopted": "2003-11-14"}
+  ],
+  "stock": [{"stock": "688"}],
+  "cars": [{"model": "SM5"}, {"model": "NewSM5/SM7"}]
+}

@@ -1,0 +1,14 @@
+{
+  "search": {
+    "url": "/fixture/search",
+    "params": {"model": "All", "mode": "Part No", "number": "{part_number}"}
+  },
+  "search_rows": {"kind": "json", "selector": "rows"},
+  "details": [{"name": "details", "url": "/fixture/details/{row.part_number}"}],
+  "result": {
+    "general": {"response": "details", "kind": "json", "selector": "general"},
+    "history": {"response": "details", "kind": "json", "selector": "history"},
+    "stock": {"response": "details", "kind": "json", "selector": "stock"},
+    "cars": {"response": "details", "kind": "json", "selector": "cars"}
+  }
+}

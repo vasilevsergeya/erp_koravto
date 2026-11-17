@@ -1,0 +1,45 @@
+{
+  "items": [
+    {
+      "part_number": "1147112920",
+      "english_name": "GASKET-OIL PUMP,CYLINDER BLOCK",
+      "weight": 1.0,
+      "volume": 0.4,
+      "compatibility": [
+        {
+          "part_number": "1147112900",
+          "adopted": "1998-01-01"
+        },
+        {
+          "part_number": "1147112910",
+          "adopted": "2001-10-01"
+        }
+      ],
+      "price": 1100.0,
+      "stock": 688,
+      "cars": [
+        "SM5",
+        "NewSM5/SM7"
+      ]
+    },
+    {
+      "part_number": "7701207449",
+      "english_name": "KIT RETAINER & SEAL-FUEL GAUGE & PUMP SPARE PARTS",
+      "weight": 98.0,
+      "volume": 2800.0,
+      "compatibility": [],
+      "price": 28600.0,
+      "stock": 609,
+      "cars": [
+        "New SM5(L43)",
+        "New SM5(L43)",
+        "All-New SM7",
+        "MASTER",
+        "QM3",
+        "CLIO",
+        "SM6",
+        "SM6"
+      ]
+    }
+  ]
+}
