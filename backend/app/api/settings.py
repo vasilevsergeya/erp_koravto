@@ -19,6 +19,7 @@ from app.core.settings import (
 from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
 from app.integrations.onec import OneCError, customer_endpoint
 from app.models import AuditEvent, User, WebhookEvent
+from app.services.parts_pricing import FORMULA_KEY, SaleFormula
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -60,6 +61,11 @@ def update_setting(
         and ("/" in str(body.value) or ":" in str(body.value) or " " in str(body.value))
     ):
         raise HTTPException(400, "Укажите имя SMTP-сервера без протокола и порта")
+    if key == FORMULA_KEY:
+        try:
+            SaleFormula.parse(str(body.value))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
     if key == "tasks.timezone":
         try:
             ZoneInfo(str(body.value))

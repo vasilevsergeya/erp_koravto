@@ -487,6 +487,15 @@ function SettingsPage() {
           ))}
         </div>
       </section>
+      <section className="surface settings-card" id="parts-pricing">
+        <h3>{t("partsPricing")}</h3>
+        <p className="muted">{t("partsPricingHint")}</p>
+        {settings.data
+          ?.filter((s) => s.key === "pricing.mobis_usd_formula")
+          .map((s) => (
+            <SettingField key={s.key} item={s} onSaved={refresh} />
+          ))}
+      </section>
       <QuickReplySettings />
       <section className="surface settings-card">
         <h3>Клиенты и заказы · 1С</h3>
