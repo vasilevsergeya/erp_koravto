@@ -90,6 +90,8 @@ services:
     <<: *common
     image: koravto-crm-mobis:${PARTS_RELEASE:-current}
     build: ../integrations/parts/mobis
+    environment:
+      ERP_MOBIS_PRICING_URL: http://api:8000/internal/parts-pricing/mobis
     mem_limit: 128m
     cpus: 0.5
     read_only: true

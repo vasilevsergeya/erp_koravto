@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import secrets
 from contextlib import asynccontextmanager
 from typing import Literal
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
@@ -15,14 +17,19 @@ from .parser import MobisBlockedError
 
 settings = load_settings()
 security = HTTPBasic()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     client = MobisClient(settings)
     app.state.mobis_client = client
-    try:
-        yield
-    finally:
-        await client.aclose()
+    app.state.pricing_url = os.getenv("ERP_MOBIS_PRICING_URL")
+    async with httpx.AsyncClient(timeout=3, trust_env=False) as pricing_client:
+        app.state.pricing_client = pricing_client
+        try:
+            yield
+        finally:
+            await client.aclose()
 
 
 app = FastAPI(title="Mobis Python API", version="0.2.0", lifespan=lifespan)
@@ -61,6 +68,7 @@ async def health() -> dict[str, str]:
     dependencies=[Depends(verify_basic_auth)],
 )
 async def part_price(
+    request: Request,
     part_number: str = Depends(normalize_part_number),
     client: MobisClient = Depends(get_client),
     brand: Literal["HYUNDAI", "KIA"] | None = Query(default=None),
@@ -75,12 +83,27 @@ async def part_price(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     first = next((price for price in prices.values() if price), None)
+    hyundai = prices["HYUNDAI"].price if prices.get("HYUNDAI") else None
+    kia = prices["KIA"].price if prices.get("KIA") else None
+    sale_prices = {}
+    params = {k: v for k, v in (("hyundai", hyundai), ("kia", kia)) if v is not None}
+    if params and request.app.state.pricing_url:
+        try:
+            response = await request.app.state.pricing_client.get(
+                request.app.state.pricing_url, params=params
+            )
+            response.raise_for_status()
+            payload = response.json()
+            sale_prices = {key: payload[key] for key in ("sale_usd_HYUNDAI", "sale_usd_KIA")}
+        except (httpx.HTTPError, KeyError, ValueError, TypeError):
+            raise HTTPException(503, "Sale pricing unavailable", headers={"Retry-After": "5"}) from None
     return PriceResponse(
         part_number=part_number,
         korean_name=first.korean_name if first else None,
         english_name=first.english_name if first else None,
-        price_HYUNDAI=prices["HYUNDAI"].price if prices.get("HYUNDAI") else None,
-        price_KIA=prices["KIA"].price if prices.get("KIA") else None,
+        price_HYUNDAI=hyundai,
+        price_KIA=kia,
+        **sale_prices,
     )
 
 

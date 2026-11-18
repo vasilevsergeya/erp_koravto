@@ -216,11 +216,25 @@ def test_api_lifespan_shares_client_and_keeps_response_shape(monkeypatch):
         return {name: ParsedPrice(part, None, "MOULDING", "6270") for name in ((brand,) if brand else ("HYUNDAI", "KIA"))}
     monkeypatch.setattr(MobisClient, "get_prices", get_prices)
     auth = (main.settings.auth_username, main.settings.auth_password)
+    monkeypatch.setenv("ERP_MOBIS_PRICING_URL", "http://crm.test/internal/parts-pricing/mobis")
+    async def quote(url, *, params):
+        assert all(v == "6270" for v in params.values())
+        return httpx.Response(200, request=httpx.Request("GET", url), json={
+            "sale_usd_HYUNDAI": "11.00" if "hyundai" in params else None,
+            "sale_usd_KIA": "11.00" if "kia" in params else None,
+        })
     with TestClient(main.app) as client:
+        monkeypatch.setattr(main.app.state.pricing_client, "get", quote)
         first = client.get("/api/v1/parts/877112K000/price", auth=auth)
         selected = client.get("/api/v1/parts/877112K000/price?brand=KIA", auth=auth)
         assert first.status_code == selected.status_code == 200
-        assert set(first.json()) == {"part_number", "korean_name", "english_name", "price_HYUNDAI", "price_KIA"}
+        assert set(first.json()) == {
+            "part_number", "korean_name", "english_name", "price_HYUNDAI", "price_KIA",
+            "sale_usd_HYUNDAI", "sale_usd_KIA",
+        }
+        assert first.json()["sale_usd_HYUNDAI"] == "11.00"
+        assert selected.json()["sale_usd_HYUNDAI"] is None
+        assert selected.json()["sale_usd_KIA"] == "11.00"
         assert selected.json()["price_HYUNDAI"] is None
         assert selected.json()["price_KIA"] == "6270"
         assert seen[0][0] == seen[1][0]

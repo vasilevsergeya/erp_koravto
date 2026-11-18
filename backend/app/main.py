@@ -23,6 +23,7 @@ from app.api import (
     integration_health,
     message_actions,
     notifications,
+    parts_pricing,
     quick_replies,
     settings,
     tasks,
@@ -57,6 +58,7 @@ app = FastAPI(
 for router in (
     auth.router,
     settings.router,
+    parts_pricing.router,
     webhooks.router,
     inbox.router,
     message_actions.router,

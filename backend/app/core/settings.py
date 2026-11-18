@@ -7,9 +7,11 @@ from sqlalchemy import select
 from app.core.config import config
 from app.core.security import decrypt, encrypt
 from app.models import AuditEvent, Setting
+from app.services.parts_pricing import DEFAULT_FORMULA, FORMULA_KEY
 
 # Secret classification is server-owned; API callers cannot change it.
 SETTING_SCHEMA = {
+    FORMULA_KEY: ("string", False, DEFAULT_FORMULA),
     "tasks.timezone": ("string", False, "Asia/Seoul"),
     "tasks.reminder_hour": ("integer", False, 9),
     "tasks.workdays": ("string", False, "1,2,3,4,5"),

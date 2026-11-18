@@ -32,3 +32,14 @@ export default i18n;
 
 i18n.addResourceBundle("ru","translation",{preferences:"Мои уведомления",preferencesHint:"Каналы, звук и история доставки",aiReport:"Отчёт AI",aiReportHint:"Решения менеджеров и расходы", "smtp.security":"Шифрование SMTP: starttls или ssl", "telegram.bot_token":"Токен Telegram-бота"},true,true);
 i18n.addResourceBundle("en","translation",{preferences:"My notifications",preferencesHint:"Channels and delivery history",aiReport:"AI report",aiReportHint:"Decisions and usage", "smtp.security":"SMTP encryption: starttls or ssl", "telegram.bot_token":"Telegram bot token"},true,true);
+
+i18n.addResourceBundle("ru", "translation", {
+  partsPricing: "Ценообразование",
+  partsPricingHint: "W — цена одной детали Mobis в вонах. Можно менять три числа в формуле. При запросе цены результат округляется до центов отдельно для Hyundai и Kia.",
+  "pricing.mobis_usd_formula": "Формула цены продажи в USD",
+}, true, true);
+i18n.addResourceBundle("en", "translation", {
+  partsPricing: "Pricing",
+  partsPricingHint: "W is the Mobis unit price in KRW. You can edit the three numbers in the formula. Each price request returns the sale price rounded to cents separately for Hyundai and Kia.",
+  "pricing.mobis_usd_formula": "USD sale price formula",
+}, true, true);

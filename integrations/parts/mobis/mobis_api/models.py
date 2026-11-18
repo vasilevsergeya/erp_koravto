@@ -9,6 +9,8 @@ class PriceResponse(BaseModel):
     english_name: str | None = None
     price_HYUNDAI: str | None = Field(default=None, alias="price_HYUNDAI")
     price_KIA: str | None = None
+    sale_usd_HYUNDAI: str | None = None
+    sale_usd_KIA: str | None = None
 
     model_config = {"populate_by_name": True}
 
