@@ -3,7 +3,6 @@
 import hashlib
 import json
 from datetime import datetime
-from decimal import ROUND_CEILING, Decimal
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -54,6 +53,7 @@ class AIConfig(BaseModel):
     delay_min: int = Field(5, ge=5, le=120)
     delay_max: int = Field(15, ge=5, le=120)
     daily_limit: int = Field(3, ge=0, le=30)
+    # Accepted for compatibility with saved AI settings from before catalog pricing.
     coefficient: float | None = Field(None, gt=0, le=1000, allow_inf_nan=False)
     rounding: Literal["up", "half", "none"] = "up"
     keywords: list[str] = Field(default_factory=list, max_length=100)
@@ -152,21 +152,3 @@ def applied_mode(cfg, intent, conversation, timestamp):
         if mode == "auto":
             mode = "draft"
     return mode
-
-
-def quote_price(cfg, krw):
-    if not cfg.coefficient:
-        return {"status": "coefficient_not_configured"}
-    amount = Decimal(str(krw))
-    if not amount.is_finite() or not 0 <= amount <= 1000000000:
-        return {"status": "invalid_amount"}
-    usd = amount / 1000 * Decimal(str(cfg.coefficient))
-    if cfg.rounding != "none":
-        step = Decimal("0.5") if cfg.rounding == "half" else Decimal(1)
-        usd = (usd / step).to_integral_value(rounding=ROUND_CEILING) * step
-    return {
-        "status": "calculated",
-        "usd": str(usd),
-        "currency": "USD",
-        "source": "formula_only_not_verified_stock",
-    }

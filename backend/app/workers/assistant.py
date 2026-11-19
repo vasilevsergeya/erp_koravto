@@ -8,6 +8,7 @@ from arq.connections import RedisSettings
 from app.core.config import config
 from app.core.logging import configure_logging
 from app.services.ai import index_example, process_draft, recovery
+from app.services.catalog_quotes import LOOKUP_SECONDS
 from app.services.notifications import notification_loop
 
 
@@ -34,7 +35,7 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     max_jobs = 1
-    job_timeout = 60
+    job_timeout = LOOKUP_SECONDS + 90
     keep_result = 0
     health_check_interval = 10
     health_check_key = "crm:assistant:health"

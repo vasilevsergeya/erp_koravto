@@ -16,6 +16,7 @@ from app.core.db import SessionLocal
 from app.core.security import hash_password, token_hash
 from app.core.settings import invalidate_settings, put_setting
 from app.integrations.openai import AIError, OpenAIAdapter
+from app.integrations.parts import PartsClient
 from app.main import app
 from app.models import (
     AIDraft,
@@ -43,9 +44,10 @@ from app.services.ai import (
     queue_auto,
     queue_inbound,
 )
-from app.services.ai_config import AIConfig, config_version, quote_price, working_time
+from app.services.ai_config import AIConfig, config_version, working_time
 from app.services.notifications import DeliveryError, deliver_notification, prepare_deliveries
 from app.services.outbox import deliver_message
+from app.services.parts_pricing import FORMULA_KEY
 from app.workers.worker import process_webhook
 
 
@@ -56,19 +58,21 @@ def output(value):
 
 
 def classification(intent="shipping", **kwargs):
-    return dict(
-        intent=intent,
-        language="en",
-        tone="neutral",
-        escalation=False,
-        exact_date=False,
-        bot_question=False,
-        orders=[],
-        parts=[],
-        vins=[],
-        cities=[],
-        amounts=[],
-        **kwargs,
+    return (
+        dict(
+            intent=intent,
+            language="en",
+            tone="neutral",
+            escalation=False,
+            exact_date=False,
+            bot_question=False,
+            orders=[],
+            parts=[],
+            vins=[],
+            cities=[],
+            amounts=[],
+        )
+        | kwargs
     )
 
 
@@ -89,14 +93,9 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(AIError, "tool_limit"):
             asyncio.run(generate(adapter, cfg, {}, "", []))
 
-    def test_defaults_budget_schedule_and_price(self):
+    def test_defaults_budget_and_schedule(self):
         cfg = AIConfig()
         self.assertTrue(all(v == ["draft", "draft"] for v in cfg.modes.values()))
-        self.assertEqual(quote_price(cfg, 1250)["status"], "coefficient_not_configured")
-        cfg.coefficient = 1.1
-        self.assertEqual(quote_price(cfg, 1250)["usd"], "2")
-        cfg.rounding = "half"
-        self.assertEqual(quote_price(cfg, 1250)["usd"], "1.5")
         cfg.holidays = [
             now().astimezone(__import__("zoneinfo").ZoneInfo(cfg.timezone)).date().isoformat()
         ]
@@ -246,6 +245,71 @@ class AIAcceptance(unittest.TestCase):
             asyncio.run(process_draft({}, self.did))
         with SessionLocal() as db:
             return db.get(AIDraft, self.did)
+
+    def test_catalog_quote_reaches_outbox_and_formula_change_stops_old_quote(self):
+        self.configure(modes={**self.cfg.modes, "availability_price": ["auto", "auto"]})
+        self.addCleanup(self.clear_test_formula)
+        part = "1147112920"
+        with SessionLocal() as db:
+            c = db.get(Conversation, self.cid)
+            message = Message(
+                conversation_id=c.id,
+                channel_id=c.channel_id,
+                external_id=uid(),
+                direction="in",
+                author_type="customer",
+                body=f"What is the price of {part}?",
+                status="inbound",
+                created_at=now() + timedelta(milliseconds=1),
+            )
+            db.add(message)
+            db.flush()
+            queue_inbound(db, c, message)
+            db.flush()
+            self.did = db.scalar(select(AIDraft.id).where(AIDraft.inbound_id == message.id))
+            put_setting(db, FORMULA_KEY, "0.01*W+0*EXP(-W/1)", False, self.user)
+            db.commit()
+
+        with (
+            patch.object(
+                PartsClient,
+                "mobis_price",
+                AsyncMock(
+                    return_value={"part_number": part, "price_HYUNDAI": None, "price_KIA": None}
+                ),
+            ),
+            patch.object(
+                PartsClient,
+                "renault_parts",
+                AsyncMock(return_value={"items": [{"part_number": part, "price": 1100}]}),
+            ),
+            patch(
+                "app.services.catalog_quotes.assistant_parts_client",
+                lambda: PartsClient(mobis_auth=("m", "test"), renault_auth=("r", "test")),
+            ),
+        ):
+            row = self.generate("availability_price", parts=[part], price_request="price")
+        self.assertIsNotNone(row.auto_at, row.policy)
+        self.assertIn(f"{part} · Renault — 11.00 USD", row.body)
+        with SessionLocal() as db:
+            db.get(AIDraft, self.did).auto_at = now() - timedelta(seconds=1)
+            db.commit()
+        queue_auto()
+        with SessionLocal() as db:
+            draft = db.get(AIDraft, self.did)
+            conversation = db.get(Conversation, self.cid)
+            self.assertEqual(draft.decision, "auto_sent")
+            self.assertEqual(db.get(Message, draft.message_id).delivery_body, row.body)
+            put_setting(db, FORMULA_KEY, "0.02*W+0*EXP(-W/1)", False, self.user)
+            db.commit()
+            self.assertFalse(auto_allowed(db, draft, conversation))
+
+    def clear_test_formula(self):
+        with SessionLocal() as db:
+            row = db.get(Setting, FORMULA_KEY)
+            if row:
+                db.delete(row)
+                db.commit()
 
     def test_draft_manual_approval_idempotence_and_confirmed_examples(self):
         row = self.generate()

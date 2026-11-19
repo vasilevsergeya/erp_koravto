@@ -35,11 +35,11 @@ i18n.addResourceBundle("en","translation",{preferences:"My notifications",prefer
 
 i18n.addResourceBundle("ru", "translation", {
   partsPricing: "Ценообразование",
-  partsPricingHint: "W — цена одной детали Mobis в вонах. Можно менять три числа в формуле. При запросе цены результат округляется до центов отдельно для Hyundai и Kia.",
+  partsPricingHint: "W — цена одной детали в вонах. Помощник использует эту формулу для Hyundai, Kia и Renault. Цена продажи округляется до центов.",
   "pricing.mobis_usd_formula": "Формула цены продажи в USD",
 }, true, true);
 i18n.addResourceBundle("en", "translation", {
   partsPricing: "Pricing",
-  partsPricingHint: "W is the Mobis unit price in KRW. You can edit the three numbers in the formula. Each price request returns the sale price rounded to cents separately for Hyundai and Kia.",
+  partsPricingHint: "W is the unit price in KRW. The assistant uses this formula for Hyundai, Kia and Renault. The sale price is rounded to cents.",
   "pricing.mobis_usd_formula": "USD sale price formula",
 }, true, true);
