@@ -232,6 +232,20 @@ class SummaryInput(BaseModel):
     language: Language
 
 
+@router.get("/me/summary-language")
+def summary_language(user=Depends(writer)):
+    return {"language": user.summary_language}
+
+
+@router.put("/me/summary-language")
+def save_summary_language(
+    body: SummaryInput, user=Depends(writer), db: Session = Depends(get_db)
+):
+    user.summary_language = body.language
+    db.commit()
+    return {"language": body.language}
+
+
 @router.post("/conversations/{conversation_id}/summary")
 def conversation_summary(
     conversation_id: str, body: SummaryInput, user=Depends(writer), db: Session = Depends(get_db)

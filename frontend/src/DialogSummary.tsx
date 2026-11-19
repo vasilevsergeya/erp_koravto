@@ -7,7 +7,7 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "./api";
 import { languageName, languages } from "./MessageTools";
@@ -35,16 +35,49 @@ const taskHeading: Record<string, string> = {
   nl: "Taak",
 };
 
+export function useSummaryLanguage(
+  userId: string,
+  enabled: boolean,
+  fallback: string,
+) {
+  const cache = useQueryClient();
+  const key = ["summary-language", userId];
+  const path = "/api/me/summary-language";
+  const preference = useQuery({
+    queryKey: key,
+    queryFn: () => api<{ language: string | null }>(path),
+    enabled,
+  });
+  const save = useMutation({
+    mutationFn: (language: string) =>
+      api<{ language: string }>(path, "PUT", { language }),
+    onSuccess: async (updated) => {
+      await cache.cancelQueries({ queryKey: key });
+      cache.setQueryData(key, updated);
+    },
+  });
+  return {
+    language:
+      (save.isPending ? save.variables : preference.data?.language) || fallback,
+    busy: preference.isLoading || save.isPending,
+    error: save.isError
+      ? "Не удалось сохранить язык сводки. Выберите язык ещё раз."
+      : preference.isError
+        ? "Не удалось загрузить сохранённый язык сводки."
+        : null,
+    change: save.mutate,
+  };
+}
+
 export function DialogSummary({
   conversationId,
-  managerLanguage,
+  preference,
 }: {
   conversationId: string;
-  managerLanguage: string;
+  preference: ReturnType<typeof useSummaryLanguage>;
 }) {
   const [opened, setOpened] = useState(false);
-  const [choice, setChoice] = useState<string | null>(null);
-  const language = choice || managerLanguage;
+  const { language } = preference;
   const options = languages.some((item) => item.value === language)
     ? languages
     : [...languages, { value: language, label: languageName(language) }];
@@ -77,18 +110,24 @@ export function DialogSummary({
               allowDeselect={false}
               data={options}
               value={language}
-              disabled={request.isPending}
+              disabled={request.isPending || preference.busy}
               onChange={(value) => {
-                if (value) setChoice(value);
+                if (value) preference.change(value);
               }}
             />
             <Button
               loading={request.isPending}
+              disabled={preference.busy}
               onClick={() => request.mutate(language)}
             >
               {result ? "Обновить сводку" : "Сформировать"}
             </Button>
           </Group>
+          {preference.error && (
+            <Alert color="red" role="alert">
+              {preference.error}
+            </Alert>
+          )}
           {request.isError && request.variables === language && (
             <Alert color="red" role="alert">
               {request.error.message}

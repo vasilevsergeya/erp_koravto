@@ -84,18 +84,27 @@ const { chromium } = require("playwright"),
     },
   ];
   const summaryRequests = [];
+  const summaryLanguages = new Map();
+  let managerId = "user-test";
   await page.route("**/api/**", async (r) => {
     const u = new URL(r.request().url()),
       p = u.pathname;
     let d = [];
     if (p === "/api/auth/me" || p === "/api/auth/refresh")
       d = {
-        id: "user-test",
+        id: managerId,
         email: "demo@example.test",
         role: "admin",
         csrf_token: "test",
         must_change_password: false,
       };
+    else if (p === "/api/me/language")
+      d = { language: "en" };
+    else if (p === "/api/me/summary-language") {
+      if (r.request().method() === "PUT")
+        summaryLanguages.set(managerId, r.request().postDataJSON().language);
+      d = { language: summaryLanguages.get(managerId) || null };
+    }
     else if (p === "/api/conversations/counts")
       d = {
         all: 142,
@@ -157,7 +166,9 @@ const { chromium } = require("playwright"),
   await page.locator(".crm-message").first().waitFor();
   await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
   const summary = page.getByRole("dialog", { name: "AI-сводка диалога" });
-  await summary.getByLabel("Язык сводки").click();
+  const summaryLanguage = summary.getByLabel("Язык сводки");
+  assert.equal(await summaryLanguage.inputValue(), "English");
+  await summaryLanguage.click();
   await page.getByRole("option", { name: "Русский" }).click();
   await summary.getByRole("button", { name: "Сформировать" }).click();
   await summary.getByText("Проверить дату отправки.").waitFor();
@@ -169,8 +180,28 @@ const { chromium } = require("playwright"),
   await page.locator('[data-dialog-id="dialog-1"]').click();
   await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
   await summary.getByRole("button", { name: "Сформировать" }).waitFor();
+  assert.equal(await summaryLanguage.inputValue(), "Русский");
   assert.equal(await summary.getByText("Проверить дату отправки.").count(), 0);
+  await summaryLanguage.click();
+  await page.getByRole("option", { name: "Deutsch" }).click();
   await page.keyboard.press("Escape");
+  await page.locator('[data-dialog-id="dialog-0"]').click();
+  await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
+  assert.equal(await summaryLanguage.inputValue(), "Deutsch");
+  assert.equal(summaryRequests.length, 1);
+  await page.keyboard.press("Escape");
+
+  for (const [id, expected] of [["another-manager", "English"], ["user-test", "Deutsch"]]) {
+    managerId = id;
+    await page.reload();
+    await page.locator('[data-dialog-id="dialog-1"]').click();
+    await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
+    await page.waitForFunction(
+      (value) => document.querySelector('[role="dialog"] input')?.value === value,
+      expected,
+    );
+    await page.keyboard.press("Escape");
+  }
   // Switching both fresh and cached dialogs must unmount the previous assistant.
   for (const id of [
     "dialog-0",

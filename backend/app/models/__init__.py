@@ -43,6 +43,7 @@ class User(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     manager_language: Mapped[str] = mapped_column(String(20), default="en")
+    summary_language: Mapped[str | None] = mapped_column(String(20))
     notification_prefs: Mapped[dict] = mapped_column(JSONB, default=dict)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(30))
     totp_secret: Mapped[str | None] = mapped_column(Text)
