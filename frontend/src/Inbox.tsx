@@ -347,7 +347,7 @@ export function Inbox({ user }: { user: User }) {
     if (row) el.scrollTop = row.offsetTop - anchor.top;
   }, [conversations.data]);
   const counters = useQuery({
-    queryKey: ["conversation-counts"],
+    queryKey: ["conversation-counts", user.id],
     queryFn: () => api<Record<string, number>>("/api/conversations/counts"),
     refetchInterval: 5000,
   });

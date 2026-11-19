@@ -19,7 +19,7 @@ import {
   Textarea,
   TextInput,
 } from "@mantine/core";
-import { Bell, Plus, Settings2 } from "lucide-react";
+import { Bell, GripVertical, Plus, Settings2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api, uploadFile, type Conversation, type User } from "./api";
 import { taskLabel } from "./task-i18n";
@@ -181,7 +181,6 @@ function toIso(value: string, zone: string) {
 }
 function refresh(query: ReturnType<typeof useQueryClient>) {
   for (const key of [
-    "tasks",
     "task",
     "task-report",
     "notifications",
@@ -193,6 +192,7 @@ function refresh(query: ReturnType<typeof useQueryClient>) {
     "customers",
   ])
     void query.invalidateQueries({ queryKey: [key] });
+  return query.invalidateQueries({ queryKey: ["tasks"] });
 }
 
 function TaskForm({
@@ -1066,6 +1066,35 @@ function AssignmentReport({
   );
 }
 
+const taskDragType = "application/x-koravto-task";
+
+function taskDragImage(event: React.DragEvent<HTMLElement>) {
+  const card = event.currentTarget;
+  const rect = card.getBoundingClientRect();
+  // Snapshot an attached card so the native drag image also works in Firefox.
+  const frame = document.createElement("div");
+  frame.className = "task-drag-image";
+  frame.setAttribute("aria-hidden", "true");
+  frame.inert = true;
+  frame.style.left = rect.left - 16 + "px";
+  frame.style.top = rect.top - 16 + "px";
+  const copy = card.cloneNode(true) as HTMLElement;
+  copy.style.width = rect.width + "px";
+  copy.querySelectorAll("[id]").forEach((el) => el.removeAttribute("id"));
+  frame.append(copy);
+  document.body.append(frame);
+  try {
+    event.dataTransfer.setDragImage(
+      frame,
+      event.clientX - rect.left + 16,
+      event.clientY - rect.top + 16,
+    );
+  } finally {
+    requestAnimationFrame(() => frame.remove());
+  }
+  return rect.height;
+}
+
 export function TasksPage({ user }: { user: User }) {
   const { t } = useTranslation("tasks");
   const query = useQueryClient();
@@ -1078,7 +1107,12 @@ export function TasksPage({ user }: { user: User }) {
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [settings, setSettings] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [drag, setDrag] = useState<{ task: Task; height: number } | null>(null);
+  const [dropColumn, setDropColumn] = useState<string | null>(null);
+  const [moving, setMoving] = useState<{ task: Task; status: string } | null>(
+    null,
+  );
+  const busy = !!moving;
   useEffect(() => {
     const timer = setTimeout(() => {
       setFilters((f) => ({ ...f, q: search }));
@@ -1108,19 +1142,20 @@ export function TasksPage({ user }: { user: User }) {
     setPage(0);
   };
   async function move(task: Task, status: string) {
+    if (busy || task.status_id === status) return;
     setError("");
-    setBusy(true);
+    setMoving({ task, status });
     try {
       await api("/api/tasks/" + task.id, "PATCH", {
         version: task.version,
         status_id: status,
       });
-      refresh(query);
+      await refresh(query);
     } catch (e) {
       setError(errorText(e));
       void query.invalidateQueries({ queryKey: ["tasks"] });
     } finally {
-      setBusy(false);
+      setMoving(null);
     }
   }
   const selectedBoard = boards.data?.find((b) => b.id === board);
@@ -1275,73 +1310,140 @@ export function TasksPage({ user }: { user: User }) {
           )}
           {tasks.isLoading && <Loader />}
           {mode === "kanban" ? (
-            <div className={"task-kanban " + (busy ? "busy" : "")}>
-              {selectedBoard?.statuses.map((status) => (
-                <section
-                  className="task-column"
-                  key={status.id}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "move";
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const task = tasks.data?.items.find(
-                      (x) => x.id === e.dataTransfer.getData("text/plain"),
-                    );
-                    if (task && !busy && task.status_id !== status.id)
-                      void move(task, status.id);
-                  }}
-                >
-                  <h3>
-                    <i style={{ background: status.color }} />
-                    {status.name}
-                    <span>
-                      {tasks.data?.items.filter(
-                        (x) => x.status_id === status.id,
-                      ).length || 0}
-                    </span>
-                  </h3>
-                  {tasks.data?.items
-                    .filter((x) => x.status_id === status.id)
-                    .map((task) => (
-                      <article
-                        key={task.id}
-                        className={
-                          "task-card " + (task.overdue ? "overdue" : "")
-                        }
-                        draggable={!busy}
-                        onDragStart={(e) =>
-                          e.dataTransfer.setData("text/plain", task.id)
-                        }
-                      >
-                        <button onClick={() => openTask(task.code)}>
-                          <small>
-                            {task.code} · {task.type_name}
-                          </small>
-                          <strong>{task.title}</strong>
-                          {task.customer_name && (
-                            <span>↗ {task.customer_name}</span>
-                          )}
-                          <span>{task.assignee_name}</span>
-                          <span className={task.overdue ? "task-overdue" : ""}>
-                            {dateText(task.due_at, zone, task.due_date_only)}
-                          </span>
-                        </button>
-                        <Select
-                          size="xs"
-                          aria-label={t("status") + " " + task.code}
-                          data={options(selectedBoard.statuses)}
-                          value={task.status_id}
-                          disabled={busy}
-                          onChange={(value) => {
-                            if (value) void move(task, value);
-                          }}
+            <div className="task-kanban" aria-busy={busy}>
+              {selectedBoard?.statuses.map((status) => {
+                const target =
+                  drag &&
+                  dropColumn === status.id &&
+                  status.id !== drag.task.status_id;
+                const arrival = target
+                  ? drag.task
+                  : moving?.status === status.id
+                    ? moving.task
+                    : null;
+                const items = tasks.data?.items || [];
+                const column = items.filter(
+                  (x) =>
+                    (x.id === moving?.task.id ? moving.status : x.status_id) ===
+                    status.id,
+                );
+                // A status change updates the timestamp. Other sort modes keep the task's list position.
+                const cards = !arrival
+                  ? column
+                  : (filters.sort || "updated") === "updated"
+                    ? [arrival, ...column.filter((x) => x.id !== arrival.id)]
+                    : items.filter(
+                        (x) => x.id === arrival.id || x.status_id === status.id,
+                      );
+                return (
+                  <section
+                    className={
+                      "task-column" + (target ? " is-drop-target" : "")
+                    }
+                    key={status.id}
+                    onDragOver={(e) => {
+                      if (!drag || busy || drag.task.status_id === status.id)
+                        return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setDropColumn(status.id);
+                    }}
+                    onDragLeave={(e) => {
+                      if (
+                        e.relatedTarget instanceof Node &&
+                        e.currentTarget.contains(e.relatedTarget)
+                      )
+                        return;
+                      setDropColumn((current) =>
+                        current === status.id ? null : current,
+                      );
+                    }}
+                    onDrop={(e) => {
+                      if (
+                        !drag ||
+                        e.dataTransfer.getData(taskDragType) !== drag.task.id
+                      )
+                        return;
+                      e.preventDefault();
+                      setDrag(null);
+                      setDropColumn(null);
+                      void move(drag.task, status.id);
+                    }}
+                  >
+                    <h3>
+                      <i style={{ background: status.color }} />
+                      {status.name}
+                      <span>{column.length}</span>
+                    </h3>
+                    {cards.map((task) =>
+                      target && task.id === drag.task.id ? (
+                        <div
+                          className="task-drop-slot"
+                          key={task.id}
+                          aria-hidden="true"
+                          style={{ height: drag.height }}
                         />
-                      </article>
-                    ))}
-                </section>
-              ))}
+                      ) : (
+                        <article
+                          key={task.id}
+                          className={
+                            "task-card" +
+                            (task.overdue ? " overdue" : "") +
+                            (drag?.task.id === task.id ? " is-dragging" : "") +
+                            (moving?.task.id === task.id ? " is-landing" : "")
+                          }
+                          draggable={!busy}
+                          onDragStart={(e) => {
+                            if (busy) {
+                              e.preventDefault();
+                              return;
+                            }
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData(taskDragType, task.id);
+                            setDropColumn(null);
+                            setDrag({ task, height: taskDragImage(e) });
+                          }}
+                          onDragEnd={() => {
+                            setDrag(null);
+                            setDropColumn(null);
+                          }}
+                        >
+                          <GripVertical
+                            className="task-grip"
+                            size={16}
+                            aria-hidden="true"
+                          />
+                          <button onClick={() => openTask(task.code)}>
+                            <small>
+                              {task.code} · {task.type_name}
+                            </small>
+                            <strong>{task.title}</strong>
+                            {task.customer_name && (
+                              <span>↗ {task.customer_name}</span>
+                            )}
+                            <span>{task.assignee_name}</span>
+                            <span
+                              className={task.overdue ? "task-overdue" : ""}
+                            >
+                              {dateText(task.due_at, zone, task.due_date_only)}
+                            </span>
+                          </button>
+                          <Select
+                            size="xs"
+                            aria-label={t("status") + " " + task.code}
+                            data={options(selectedBoard.statuses)}
+                            value={status.id}
+                            disabled={busy}
+                            onChange={(value) => {
+                              if (value) void move(task, value);
+                            }}
+                          />
+                        </article>
+                      ),
+                    )}
+                  </section>
+                );
+              })}
             </div>
           ) : (
             <div className="surface task-table">

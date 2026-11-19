@@ -652,7 +652,7 @@ function Workspace({
     ) || [];
   const query = useQueryClient();
   const counters = useQuery({
-    queryKey: ["conversation-counts"],
+    queryKey: ["conversation-counts", user.id],
     queryFn: () => api<Record<string, number>>("/api/conversations/counts"),
     refetchInterval: 15000,
   });

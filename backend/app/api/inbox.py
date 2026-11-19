@@ -319,7 +319,7 @@ def counts(user=Depends(current_user), db: Session = Depends(get_db)):
         func.count().filter(pending_draft()).label("ai_draft"),
         select(func.count())
         .select_from(Task)
-        .where(Task.completed_at.is_(None))
+        .where(Task.assignee_id == user.id, Task.completed_at.is_(None))
         .scalar_subquery()
         .label("open_tasks"),
     ).select_from(Conversation)

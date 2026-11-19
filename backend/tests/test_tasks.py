@@ -39,8 +39,8 @@ class TasksAcceptance(unittest.TestCase):
         self.admin, self.staff, self.other = uid(), uid(), uid()
         self.conversation, self.board, self.kind = uid(), uid(), uid()
         self.statuses = [
-            {"id": uid(), "name": name, "color": "blue", "position": i, "terminal": i == 2}
-            for i, name in enumerate(["Новая", "В работе", "Готово"])
+            {"id": uid(), "name": name, "color": "blue", "position": i, "terminal": i >= 2}
+            for i, name in enumerate(["Новая", "В работе", "Готово", "Отменено"])
         ]
         with SessionLocal() as db:
             for user_id, role in [
@@ -122,6 +122,22 @@ class TasksAcceptance(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
+
+    def test_menu_counts_only_assigned_unfinished_tasks(self):
+        def count(client):
+            return client.get("/api/conversations/counts").json()["open_tasks"]
+
+        self.create(assignee_id=self.other, watchers=[self.staff])
+        self.create(assignee_id=None)
+        task, _ = self.create()
+        self.assertEqual((count(self.client), count(self.staff_client)), (0, 1))
+        task = self.change(task, assignee_id=self.admin)
+        self.assertEqual((count(self.client), count(self.staff_client)), (1, 0))
+        for terminal in self.statuses[2:]:
+            task = self.change(task, status_id=terminal["id"])
+            self.assertEqual(count(self.client), 0)
+            task = self.change(task, status_id=self.statuses[0]["id"])
+            self.assertEqual(count(self.client), 1)
 
     def test_create_from_chat_retry_notification_and_completion_are_internal(self):
         before = self.staff_client.get("/api/conversations/counts").json()["open_tasks"]
