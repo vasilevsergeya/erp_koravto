@@ -28,7 +28,7 @@ class SaleFormula:
             raise ValueError("Коэффициент при W и делитель экспоненты должны быть больше нуля.")
         return cls(rate, premium, scale)
 
-    def sale_usd(self, won: int | None) -> str | None:
+    def sale_usd(self, won: int | Decimal | None) -> str | None:
         if won is None or won <= 0:
             return None
         with localcontext() as context:

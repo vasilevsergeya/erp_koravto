@@ -81,6 +81,8 @@ services:
     environment: *app-env
     volumes:
       - ../data/logs/app:/var/log/crm
+      - ../data/secrets/parts/mobis.ini:/run/config/mobis.ini:ro
+      - ../data/secrets/parts/renault.ini:/run/config/renault.ini:ro
     depends_on:
       api: {condition: service_started}
       postgres: {condition: service_healthy}

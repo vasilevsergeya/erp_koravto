@@ -3,6 +3,7 @@ from typing import cast
 
 from redis import Redis, RedisError
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.config import config
 from app.core.security import decrypt, encrypt
@@ -106,3 +107,8 @@ def direct_secret(db, key: str) -> str:
     # Security-sensitive webhook tokens bypass process caches.
     row = db.scalar(select(Setting).where(Setting.key == key))
     return decrypt(row.value["encrypted"], key) if row and row.is_secret else ""
+
+
+def pricing_expression(db: Session) -> str:
+    setting = db.get(Setting, FORMULA_KEY)
+    return setting.value["value"] if setting else DEFAULT_FORMULA

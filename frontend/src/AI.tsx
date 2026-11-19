@@ -53,9 +53,10 @@ const reasons: Record<string, string> = {
   language: "Проверьте язык ответа",
   forbidden_phrase: "Обнаружена запрещённая фраза",
   exact_date: "Указана точная дата",
-  no_source_facts: "Нет подтверждённых данных из 1С",
+  no_source_facts: "Для части вопроса нет подтверждённых данных",
   shipping_not_configured: "Условия доставки ещё не настроены",
   human_required: "Требуется менеджер",
+  unconfirmed_catalog_price: "Цена детали не подтверждена каталогом",
   price_not_configured: "Коэффициент цены не задан",
   unknown_price: "Не задан тариф модели",
   monthly_budget: "Достигнут месячный лимит",
@@ -83,7 +84,7 @@ type Draft = {
   policy: { passed?: boolean; reasons?: string[] };
   auto_at: string | null;
   created_at: string;
-  tool_calls: { name: string; result: unknown }[];
+  tool_calls: { name: string; arguments?: { part_number?: string }; result: unknown }[];
 };
 function refresh(query: ReturnType<typeof useQueryClient>) {
   for (const key of [
@@ -108,10 +109,17 @@ function sourceSummary(name: string, result: unknown): string {
     get_order: "Заказ",
     get_customer_context: "Данные клиента",
     quote_price: "Расчёт цены",
+    catalog_price: "Цена детали",
     search_examples: "Примеры ответов",
     get_policies: "Правила компании",
   };
   const label = labels[name] || "Источник";
+  if (name === "catalog_price") {
+    if (value.status === "ok") return `Цена за штуку · ${value.source}`;
+    if (value.status === "not_found") return "Артикул не найден в Mobis и Renault";
+    if (value.status === "no_price") return "В каталоге отсутствует цена";
+    return "Не удалось проверить цену в каталоге";
+  }
   if (value.status === "source_not_connected") {
     const numbers = Array.isArray(value.known_order_numbers)
       ? value.known_order_numbers.filter(
@@ -448,7 +456,12 @@ export function DraftPanel({
               <summary>{t("sources")}</summary>
               {d.tool_calls.map((call, index) => (
                 <div key={index}>
-                  <p>{sourceSummary(call.name, call.result)}</p>
+                  <p>
+                    {call.name === "catalog_price" && call.arguments?.part_number
+                      ? `${call.arguments.part_number} · `
+                      : ""}
+                    {sourceSummary(call.name, call.result)}
+                  </p>
                   {isAdmin && (
                     <details>
                       <summary>Подробности</summary>
@@ -530,8 +543,8 @@ export function AISettings({ keyControl }: { keyControl: ReactNode }) {
     <section className="surface settings-card">
       <h3>AI · черновики и автоответы</h3>
       <p className="muted">
-        По умолчанию ответы проверяет менеджер. Данные 1С сейчас содержат имена
-        и номера реализаций; статусы, остатки и цены ещё не подключены.
+        По умолчанию ответы проверяет менеджер. Помощник ищет цену детали в Mobis,
+        затем при необходимости в Renault. Формула задаётся в разделе «Ценообразование».
       </p>
       {keyControl}
       {data.data ? (
@@ -735,7 +748,7 @@ function ConfigForm({ initial }: { initial: ConfigResult }) {
         />
       </details>
       <details>
-        <summary>Эскалация и правила цены</summary>
+        <summary>Передача диалога менеджеру</summary>
         <TagsInput
           label="Ключевые фразы для передачи менеджеру"
           value={c.keywords}
@@ -745,22 +758,6 @@ function ConfigForm({ initial }: { initial: ConfigResult }) {
           label="Теги клиентов: всегда менеджеру"
           value={c.human_tags}
           onChange={(v) => change("human_tags", v)}
-        />
-        <NumberInput
-          label="Коэффициент: USD = KRW / 1000 × коэффициент"
-          value={c.coefficient ?? ""}
-          min={0.001}
-          onChange={(v) => change("coefficient", v === "" ? null : Number(v))}
-        />
-        <Select
-          label="Округление цены"
-          value={c.rounding}
-          data={[
-            { value: "up", label: "Вверх до целого доллара" },
-            { value: "half", label: "Вверх до 0,5 доллара" },
-            { value: "none", label: "Без округления" },
-          ]}
-          onChange={(v) => change("rounding", v || "up")}
         />
       </details>
       <details>
