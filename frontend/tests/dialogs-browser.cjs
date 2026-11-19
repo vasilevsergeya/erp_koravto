@@ -83,6 +83,7 @@ const { chromium } = require("playwright"),
       created_at: new Date().toISOString(),
     },
   ];
+  const summaryRequests = [];
   await page.route("**/api/**", async (r) => {
     const u = new URL(r.request().url()),
       p = u.pathname;
@@ -112,6 +113,10 @@ const { chromium } = require("playwright"),
     else if (/\/conversations\/[^/]+$/.test(p))
       d = dialogs.find((x) => p.endsWith(x.id)) || dialogs[0];
     else if (p.endsWith("/messages")) d = msgs;
+    else if (p.endsWith("/summary")) {
+      summaryRequests.push([p, r.request().method(), r.request().postDataJSON()]);
+      d = { summary: "Клиент уточняет срок доставки.", task: "Проверить дату отправки." };
+    }
     else if (p.endsWith("/customer"))
       d = { status: "not_found", clients: [], stale: false, error: null };
     else if (p.startsWith("/api/customers/")) d = profile;
@@ -144,10 +149,28 @@ const { chromium } = require("playwright"),
       };
     await r.fulfill({ json: d });
   });
-  await page.route("**/health", (r) => r.fulfill({ json: { ok: true } }));
+  await page.route((url) => url.pathname === "/health", (r) =>
+    r.fulfill({ json: { ok: true } }),
+  );
   await page.goto(process.env.CRM_TEST_BASE_URL || "http://127.0.0.1:5173/");
   await page.locator('[data-dialog-id="dialog-0"]').click();
   await page.locator(".crm-message").first().waitFor();
+  await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
+  const summary = page.getByRole("dialog", { name: "AI-сводка диалога" });
+  await summary.getByLabel("Язык сводки").click();
+  await page.getByRole("option", { name: "Русский" }).click();
+  await summary.getByRole("button", { name: "Сформировать" }).click();
+  await summary.getByText("Проверить дату отправки.").waitFor();
+  assert.deepEqual(summaryRequests, [["/api/conversations/dialog-0/summary", "POST", { language: "ru" }]]);
+  assert.deepEqual(await summary.locator('[lang="ru"] p').allTextContents(), [
+    "Клиент уточняет срок доставки.", "Задача", "Проверить дату отправки.",
+  ]);
+  await page.keyboard.press("Escape");
+  await page.locator('[data-dialog-id="dialog-1"]').click();
+  await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
+  await summary.getByRole("button", { name: "Сформировать" }).waitFor();
+  assert.equal(await summary.getByText("Проверить дату отправки.").count(), 0);
+  await page.keyboard.press("Escape");
   // Switching both fresh and cached dialogs must unmount the previous assistant.
   for (const id of [
     "dialog-0",

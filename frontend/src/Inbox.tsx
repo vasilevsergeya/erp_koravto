@@ -59,6 +59,7 @@ import { ConversationTasks, createTask, openTask } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
 import { QuickReplyPicker } from "./QuickReplies";
 import { DraftPanel } from "./AI";
+import { DialogSummary } from "./DialogSummary";
 import { loadDraft, saveDraft, removeDraft } from "./inbox-drafts";
 import { taskLabel } from "./task-i18n";
 import { OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
@@ -1060,6 +1061,13 @@ export function Inbox({ user }: { user: User }) {
                 <small>{c?.phone}</small>
               </div>
               {c && <Badge variant="light">{t(c.state)}</Badge>}
+              {canWrite && c && (
+                <DialogSummary
+                  key={`summary:${c.id}`}
+                  conversationId={c.id}
+                  managerLanguage={ownLanguage}
+                />
+              )}
               {c?.customer_id && (
                 <TranslationPreferences
                   key={c.id}
