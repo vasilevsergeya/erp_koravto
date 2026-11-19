@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -50,10 +51,11 @@ def get_client(request: Request) -> MobisClient:
     return request.app.state.mobis_client
 
 
-def normalize_part_number(
-    part_number: str = Path(..., min_length=1, pattern=r"^[A-Za-z0-9-]+$")
-) -> str:
-    return part_number.strip().upper()
+def normalize_part_number(part_number: str = Path(..., min_length=1)) -> str:
+    number = re.sub(r"[\s\-‐‑‒–—−]+", "", part_number).upper()
+    if not re.fullmatch(r"[A-Z0-9]+", number):
+        raise HTTPException(422, "Invalid part number")
+    return number
 
 
 @app.get("/health")

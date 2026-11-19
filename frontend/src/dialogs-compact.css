@@ -695,3 +695,23 @@
     display: none;
   }
 }
+
+.sidebar nav button { position: relative; }
+.nav-count {
+  margin-left: auto;
+  min-width: 1.6em;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: #314857;
+  color: #d6eae6;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.sidebar-user-name { display: block; color: #d3dce2; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-settings { max-width: 520px; margin-bottom: 20px; display: grid; gap: 12px; justify-items: start; }
+.profile-settings .mantine-TextInput-root { width: 100%; }
+.navigation-collapsed .nav-count { position: absolute; top: 0; right: 0; font-size: 9px; padding: 0 3px; }
+@media (max-width: 760px) {
+  .nav-count { position: absolute; top: 0; right: 0; font-size: 9px; padding: 0 3px; }
+}

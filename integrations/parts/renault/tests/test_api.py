@@ -15,7 +15,7 @@ def test_post_end_to_end(settings, profile, adapter, session_factory):
     service = PartsService(settings, profile, session_factory)
     with TestClient(create_app(settings, service)) as client:
         response = client.post(
-            "/parts", auth=AUTH, json={"part_numbers": ["1147112920", "7701207449", "1147112920"]}
+            "/parts", auth=AUTH, json={"part_numbers": ["11471-129 20", "7701207449", "1147112920"]}
         )
     assert response.status_code == 200, response.text
     first, second, duplicate = response.json()["items"]

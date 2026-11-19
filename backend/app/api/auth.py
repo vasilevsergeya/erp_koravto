@@ -17,6 +17,7 @@ from app.core.security import (
 )
 from app.core.settings import redis_client
 from app.models import AuditEvent, LoginSession, User, UserAccessToken, now
+from app.services.outbox import emit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 COOKIE = "__Host-crm_session"
@@ -78,6 +79,7 @@ def describe(session, user):
     return {
         "id": user.id,
         "email": user.email,
+        "display_name": user.name,
         "role": user.role,
         "manager_language": user.manager_language,
         "csrf_token": session.csrf_token,
@@ -133,6 +135,26 @@ def login(body: LoginInput, request: Request, response: Response, db: Session = 
 @router.get("/me")
 def me(auth=Depends(auth_session)):
     return describe(*auth)
+
+
+class ProfileInput(BaseModel):
+    display_name: str = Field(min_length=1, max_length=100)
+
+
+@router.put("/profile")
+def update_profile(
+    body: ProfileInput,
+    auth=Depends(auth_session),
+    user=Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    name = body.display_name.strip()
+    if not name or not name.isprintable():
+        raise HTTPException(422, "Введите имя пользователя")
+    user.display_name = name
+    db.commit()
+    emit("team.changed")
+    return describe(auth[0], user)
 
 
 @router.post("/refresh")

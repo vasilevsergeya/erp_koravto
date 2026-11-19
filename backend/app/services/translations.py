@@ -15,6 +15,7 @@ from app.integrations.openai import AIError, OpenAIAdapter, output_json
 from app.models import Conversation, Customer, Message, MessageTranslation, now, uid
 from app.services.ai import month_spend, record_usage
 from app.services.ai_config import settings
+from app.services.catalog_quotes import STOCK_LABELS
 from app.services.dialog_languages import client_language, incoming_enabled, manager_language
 from app.services.outbox import emit
 
@@ -139,8 +140,37 @@ def view_translation(db, message, customer, user):
 # The assistant renders its own catalog rows. Preserve those exact SKU/brand/price
 # associations on every reading and delivery path, including an edited draft.
 _CATALOG_ROW = re.compile(
-    r"^[A-Z0-9][A-Z0-9.-]{0,39} · (?:HYUNDAI|KIA|Renault) — [0-9]+\.[0-9]{2} USD$", re.M
+    r"^[A-Z0-9][A-Z0-9.-]{0,39} · (?:HYUNDAI|KIA|Renault) — [0-9]+\.[0-9]{2} USD\b", re.M
 )
+
+_ITEM_LINE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,39}(?: · (?:HYUNDAI|KIA|Renault))? — .+$", re.M)
+
+
+def stock_row_translation(line, source, target):
+    """Translate only the ERP's fixed availability lines, leaving edited prose to the translator."""
+    part, _, detail = line.partition(" — ")
+    a, b = STOCK_LABELS[source], STOCK_LABELS[target]
+    if detail == f"{a['no_price']}. {a['check']}.":
+        return f"{part} — {b['no_price']}. {b['check']}."
+    price, sep, status = detail.partition(" · ")
+    unit_price = re.fullmatch(r"([0-9]+\.[0-9]{2} USD) " + re.escape(a["unit"]), price)
+    if unit_price:
+        price = f"{unit_price[1]} {b['unit']}"
+        if not sep:
+            return f"{part} — {price}"
+    elif not sep:
+        return None
+    elif price == a["no_price"]:
+        price = b["no_price"]
+    elif not re.fullmatch(r"[0-9]+\.[0-9]{2} USD", price):
+        return None
+    for key in ("check", "listed", "stock"):
+        if status == a[key]:
+            return f"{part} — {price} · {b[key]}"
+    count = re.fullmatch(re.escape(a["stock"]) + r" (\([0-9]+\))", status)
+    if count and part.endswith(" · Renault"):
+        return f"{part} — {price} · {b['stock']}"
+    return None
 
 
 async def translate_text(value, source, target):
@@ -148,15 +178,24 @@ async def translate_text(value, source, target):
         return value
     rows = {}
 
-    def protect(match):
+    def protect(text):
         marker = f"[[{uuid4().hex}]]"
-        rows[marker] = match.group()
+        rows[marker] = text
         return marker
 
-    original = value
-    value = _CATALOG_ROW.sub(protect, value)
-    if rows and not _CATALOG_ROW.sub("", original).strip():
-        return original
+    src, tgt = source.split("-")[0], target.split("-")[0]
+    if src in STOCK_LABELS and tgt in STOCK_LABELS:
+
+        def protect_stock(match):
+            translated = stock_row_translation(match.group(), src, tgt)
+            return protect(translated) if translated else match.group()
+
+        value = _ITEM_LINE.sub(protect_stock, value)
+    value = _CATALOG_ROW.sub(lambda m: protect(m.group()), value)
+    if rows and all(line in rows for line in value.splitlines() if line.strip()):
+        for marker, row in rows.items():
+            value = value.replace(marker, row)
+        return value
     with SessionLocal() as db:
         cfg = settings(db)
         key = get_setting(db, "openai.api_key", "")

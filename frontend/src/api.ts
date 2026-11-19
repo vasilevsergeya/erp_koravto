@@ -1,6 +1,7 @@
 export type User = {
   id: string;
   email: string;
+  display_name: string;
   role: string;
   manager_language?: string;
   csrf_token: string;

@@ -563,7 +563,70 @@ function SettingsPage() {
   );
 }
 
-function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
+function ProfileSettings({
+  user,
+  onSave,
+}: {
+  user: User;
+  onSave: (value: User) => void;
+}) {
+  const [name, setName] = useState(user.display_name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const updated = await api<User>("/api/auth/profile", "PUT", {
+        display_name: name.trim(),
+      });
+      onSave(updated);
+      setName(updated.display_name);
+      setSaved(true);
+    } catch (error) {
+      setError(errText(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="surface settings-card profile-settings" onSubmit={save}>
+      <TextInput
+        label="Имя пользователя"
+        value={name}
+        required
+        maxLength={100}
+        onChange={(event) => {
+          setName(event.currentTarget.value);
+          setSaved(false);
+        }}
+      />
+      <Button
+        type="submit"
+        loading={busy}
+        disabled={!name?.trim() || name.trim() === user.display_name}
+      >
+        Сохранить имя
+      </Button>
+      {error && <Alert color="red">{error}</Alert>}
+      {saved && <small role="status">Имя сохранено</small>}
+    </form>
+  );
+}
+
+function Workspace({
+  user,
+  onLogout,
+  onUser,
+}: {
+  user: User;
+  onLogout: () => void;
+  onUser: (value: User) => void;
+}) {
   const { t } = useTranslation();
   const [page, setPage] = useState(
     location.pathname.startsWith("/customers")
@@ -587,6 +650,15 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       (w) => !["webhook_silent", "subscription_repaired"].includes(w.code),
     ) || [];
   const query = useQueryClient();
+  const counters = useQuery({
+    queryKey: ["conversation-counts"],
+    queryFn: () => api<Record<string, number>>("/api/conversations/counts"),
+    refetchInterval: 15000,
+  });
+  const navCounts: Record<string, number | undefined> = {
+    inbox: counters.data?.unanswered,
+    boards: counters.data?.open_tasks,
+  };
   const health = useQuery({
     queryKey: ["health"],
     queryFn: () => api<{ ok: boolean }>("/health"),
@@ -618,6 +690,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           ) {
             for (const key of [
               "admin-users",
+              "messages",
+              "tasks",
+              "task",
               "team",
               "quick-replies",
               "integration-health",
@@ -764,9 +839,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       ? [
           { id: "employees", icon: Users },
           { id: "aiReport", icon: Sparkles },
-          { id: "settings", icon: Settings },
         ]
       : []),
+    { id: "settings", icon: Settings },
   ];
   return (
     <div
@@ -802,8 +877,16 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           {pages.map((p) => (
             <button
               key={p.id}
-              title={t(p.id)}
-              aria-label={t(p.id)}
+              title={
+                navCounts[p.id] === undefined
+                  ? t(p.id)
+                  : `${t(p.id)} · ${navCounts[p.id]}`
+              }
+              aria-label={
+                navCounts[p.id] === undefined
+                  ? t(p.id)
+                  : `${t(p.id)} · ${navCounts[p.id]}`
+              }
               className={page === p.id ? "active" : ""}
               onClick={() => {
                 history.pushState(
@@ -816,14 +899,23 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             >
               <p.icon size={19} />
               <span className="nav-text">{t(p.id)}</span>
-              {page === p.id && <ChevronRight size={16} />}
+              {navCounts[p.id] !== undefined ? (
+                <span className="nav-count">{navCounts[p.id]}</span>
+              ) : (
+                page === p.id && <ChevronRight size={16} />
+              )}
             </button>
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="user-avatar">{user.email[0].toUpperCase()}</div>
+          <div className="user-avatar">
+            {(user.display_name || user.email)[0].toUpperCase()}
+          </div>
           <div className="user-meta">
             <b>{user.email}</b>
+            <span className="sidebar-user-name" title={user.display_name}>
+              {user.display_name}
+            </span>
             <small>{user.role === "admin" ? "Администратор" : user.role}</small>
           </div>
           <button
@@ -907,7 +999,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           ) : page === "aiReport" ? (
             <AIReport />
           ) : (
-            <SettingsPage />
+            <>
+              <ProfileSettings
+                user={user}
+                onSave={(updated) => {
+                  onUser(updated);
+                  for (const key of ["team", "messages", "tasks", "task"]) {
+                    void query.invalidateQueries({ queryKey: [key] });
+                  }
+                }}
+              />
+              {user.role === "admin" && <SettingsPage />}
+            </>
           )}
         </div>
       </main>
@@ -999,7 +1102,9 @@ function App() {
         <Auth user={user} onUser={update} />
       </>
     );
-  return <Workspace user={user} onLogout={() => void logout()} />;
+  return (
+    <Workspace user={user} onUser={update} onLogout={() => void logout()} />
+  );
 }
 
 createRoot(document.getElementById("root")!).render(

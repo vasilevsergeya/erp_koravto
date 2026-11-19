@@ -1,8 +1,13 @@
 """Async client for ERP's Mobis and Renault services (no credentials in code)."""
+import re
 from typing import Literal
 from urllib.parse import quote
 
 import httpx
+
+
+def normalize_part_number(value: str) -> str:
+    return re.sub(r"[\s\-‐‑‒–—−]+", "", value).upper()
 
 
 class PartsClient:
@@ -46,13 +51,13 @@ class PartsClient:
 
     async def _mobis_part(self, part_number: str, kind: str, brand: str | None) -> dict:
         response = await self.mobis.get(
-            f"parts/{quote(part_number, safe='')}/{kind}",
+            f"parts/{quote(normalize_part_number(part_number), safe='')}/{kind}",
             params={"brand": brand} if brand else {},
         )
         response.raise_for_status()
         return response.json()
 
     async def renault_parts(self, part_numbers: list[str]) -> dict:
-        response = await self.renault.post("parts", json={"part_numbers": part_numbers})
+        response = await self.renault.post("parts", json={"part_numbers": [normalize_part_number(part) for part in part_numbers]})
         response.raise_for_status()
         return response.json()

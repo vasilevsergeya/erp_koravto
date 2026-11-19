@@ -188,7 +188,7 @@ def describe_message(m, db, user_id=None):
         "id": m.id,
         "direction": m.direction,
         "author_type": m.author_type,
-        "author_name": author.email if author else None,
+        "author_name": author.name if author else None,
         "text": "" if m.deleted else m.body,
         "version": m.version,
         "author_id": m.author_id,
@@ -309,26 +309,21 @@ def conversations(
 
 @router.get("/conversations/counts")
 def counts(user=Depends(current_user), db: Session = Depends(get_db)):
-    return {
-        "ai_draft": db.scalar(
-            select(func.count()).select_from(Conversation).where(pending_draft())
-        ),
-        "all": db.scalar(select(func.count()).select_from(Conversation)),
-        "waiting_us": db.scalar(
-            select(func.count()).select_from(Conversation).where(Conversation.state == "waiting_us")
-        ),
-        "mine": db.scalar(
-            select(func.count())
-            .select_from(Conversation)
-            .where(Conversation.assignee_id == user.id)
-        ),
-        "human": db.scalar(
-            select(func.count()).select_from(Conversation).where(Conversation.needs_human)
-        ),
-        "closed": db.scalar(
-            select(func.count()).select_from(Conversation).where(Conversation.state == "closed")
-        ),
-    }
+    query = select(
+        func.count().label("all"),
+        func.count().filter(Conversation.unread_count > 0).label("unanswered"),
+        func.count().filter(Conversation.state == "waiting_us").label("waiting_us"),
+        func.count().filter(Conversation.assignee_id == user.id).label("mine"),
+        func.count().filter(Conversation.needs_human).label("human"),
+        func.count().filter(Conversation.state == "closed").label("closed"),
+        func.count().filter(pending_draft()).label("ai_draft"),
+        select(func.count())
+        .select_from(Task)
+        .where(Task.completed_at.is_(None))
+        .scalar_subquery()
+        .label("open_tasks"),
+    ).select_from(Conversation)
+    return dict(db.execute(query).mappings().one())
 
 
 @router.get("/conversations/{conversation_id}")
@@ -801,7 +796,7 @@ def channels_adapter(db: Session):
 @router.get("/team")
 def team(user=Depends(current_user), db: Session = Depends(get_db)):
     return [
-        {"id": u.id, "name": u.email, "role": u.role}
+        {"id": u.id, "name": u.name, "role": u.role}
         for u in db.scalars(select(User).where(User.active))
     ]
 

@@ -17,9 +17,9 @@ def test_supplier_methods_preserve_contracts():
     async def run():
         async with PartsClient(mobis_auth=("m", "pw"), renault_auth=("r", "pw"),
                                transport=httpx.MockTransport(handle)) as client:
-            await client.mobis_price("92101T4200", "KIA")
-            await client.mobis_stores("58310G7A30")
-            await client.renault_parts(["1147112920"])
+            await client.mobis_price("92101- T4200", "KIA")
+            await client.mobis_stores("58310 G7A30")
+            await client.renault_parts(["11471-129 20"])
     asyncio.run(run())
     assert str(seen[0].url) == "http://mobis:8000/api/v1/parts/92101T4200/price?brand=KIA"
     assert str(seen[1].url) == "http://mobis:8000/api/v1/parts/58310G7A30/stores"
@@ -35,5 +35,5 @@ def test_supplier_failure_is_not_reported_as_empty_stock():
                                    lambda _: httpx.Response(503, json={"detail": "unavailable"})
                                )) as client:
             with pytest.raises(httpx.HTTPStatusError):
-                await client.mobis_stores("58310G7A30")
+                await client.mobis_stores("58310 G7A30")
     asyncio.run(run())

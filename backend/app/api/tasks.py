@@ -168,7 +168,7 @@ def task_row(db, key, lock=False):
 
 def person(db, user_id):
     user = db.get(User, user_id) if user_id else None
-    return user.email if user else "Не назначен"
+    return user.name if user else "Не назначен"
 
 
 def describe(task, db):

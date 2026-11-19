@@ -80,8 +80,8 @@ def system_note(db, task, actor, action, comment=""):
             kind="system",
             status="internal",
             is_private_note=True,
-            body=f"{author.email if author else 'Система'} · Задача T-{task.number} {action}: {task.title}"
-            + f"\nИсполнитель: {assignee.email if assignee else 'не назначен'}"
+            body=f"{author.name if author else 'Система'} · Задача T-{task.number} {action}: {task.title}"
+            + f"\nИсполнитель: {assignee.name if assignee else 'не назначен'}"
             + ("\n" + comment if comment else ""),
         )
     )

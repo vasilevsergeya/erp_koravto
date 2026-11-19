@@ -169,7 +169,7 @@ def detail(db, customer):
 
     def actor(user_id):
         user = db.get(User, user_id) if user_id else None
-        return user.email if user else "Система"
+        return user.name if user else "Система"
 
     tasks = db.scalars(
         select(Task)

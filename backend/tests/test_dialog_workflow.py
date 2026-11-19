@@ -192,7 +192,12 @@ class DialogWorkflowTests(unittest.TestCase):
         self.assertEqual(self.conversation()["unread_count"], 1)
         note = self.send("Internal", is_private_note=True)
         self.assertEqual(self.conversation()["unread_count"], 1)
-        self.assertEqual(note["author_name"], self.user + "@example.invalid")
+        self.assertEqual(note["author_name"], self.user)
+        profile = self.client.put("/api/auth/profile", json={"display_name": "  Сергей  "})
+        self.assertEqual(profile.json()["display_name"], "Сергей")
+        self.assertEqual(self.client.get("/api/auth/me").json()["display_name"], "Сергей")
+        self.assertEqual(self.other_client.get("/api/auth/me").json()["display_name"], self.other)
+        self.assertEqual(self.send("Ещё заметка", is_private_note=True)["author_name"], "Сергей")
         msg = self.send()
         self.assertEqual(self.conversation()["unread_count"], 1)
         self.incoming("New question during send")
@@ -210,9 +215,14 @@ class DialogWorkflowTests(unittest.TestCase):
         self.assertEqual(self.conversation()["unread_count"], 1)
 
     def test_manual_buttons_are_versioned_and_apply_to_whole_team(self):
+        def unanswered():
+            return self.other_client.get("/api/conversations/counts").json()["unanswered"]
+
+        before = unanswered()
         self.incoming()
         body = {"required": False, "inbound_seq": self.conversation()["inbound_seq"]}
         self.incoming("Another")
+        self.assertEqual(unanswered(), before + 1)
         path = f"/api/conversations/{self.cid}/response-state"
         self.assertEqual(self.client.post(path, json=body).status_code, 409)
         body["inbound_seq"] = self.conversation()["inbound_seq"]
@@ -220,8 +230,11 @@ class DialogWorkflowTests(unittest.TestCase):
         self.assertEqual(
             self.other_client.get("/api/conversations/" + self.cid).json()["unread_count"], 0
         )
+        self.assertEqual(unanswered(), before)
         body["required"] = True
         self.assertEqual(self.client.post(path, json=body).json()["unread_count"], 1)
+
+        self.assertEqual(unanswered(), before + 1)
 
     def test_old_delivery_receipt_cannot_override_manually_required_reply(self):
         self.incoming()

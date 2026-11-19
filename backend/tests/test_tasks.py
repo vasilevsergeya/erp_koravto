@@ -124,8 +124,12 @@ class TasksAcceptance(unittest.TestCase):
         return response.json()
 
     def test_create_from_chat_retry_notification_and_completion_are_internal(self):
+        before = self.staff_client.get("/api/conversations/counts").json()["open_tasks"]
         task, body = self.create(
             conversation_id=self.conversation, order_no="000012", watchers=[self.other]
+        )
+        self.assertEqual(
+            self.staff_client.get("/api/conversations/counts").json()["open_tasks"], before + 1
         )
         duplicate = self.client.post("/api/tasks", json=body)
         self.assertEqual(duplicate.status_code, 201)
@@ -159,6 +163,9 @@ class TasksAcceptance(unittest.TestCase):
         )
         self.assertEqual(done.status_code, 200, done.text)
         self.assertIsNotNone(done.json()["completed_at"])
+        self.assertEqual(
+            self.staff_client.get("/api/conversations/counts").json()["open_tasks"], before
+        )
         detail = self.client.get("/api/tasks/" + task["code"]).json()
         self.assertEqual(detail["comments"][0]["text"], "Получено на склад")
         self.assertEqual(len(detail["history"]), 2)

@@ -39,8 +39,8 @@ const decisions: Record<string, string> = {
   auto_sent: "Автоответ поставлен в очередь",
 };
 const states: Record<string, string> = {
-  queued: "Готовится",
-  generating: "Готовится",
+  queued: "Готовится ответ AI…",
+  generating: "Готовится ответ AI…",
   ready: "Черновик готов",
   unavailable: "AI недоступен",
   not_configured: "Ключ OpenAI не настроен",
@@ -204,7 +204,7 @@ export function DraftPanel({
       ? managerLanguage
       : sendLanguage || clientLanguage || d?.language || "";
   const state = data.isLoading
-    ? "Готовится…"
+    ? "Загрузка…"
     : !pending
       ? "Черновика нет"
       : states[d.state] || d.state;
@@ -254,11 +254,7 @@ export function DraftPanel({
           {state}
         </span>
         <span className="ai-line-preview" dir="auto">
-          {pending
-            ? readable
-              ? d.manager_text
-              : "Перевод для менеджера готовится…"
-            : ""}
+          {pending && readable ? d.manager_text : ""}
         </span>
         {!pending && canWrite && data.data?.configured && data.data.enabled && (
           <span className="ai-prepare-hint">Подготовить</span>

@@ -1,7 +1,12 @@
+import re
 from datetime import date
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
+
+def normalize_part_number(value):
+    return re.sub(r"[\s\-‐‑‒–—−]+", "", value).upper() if isinstance(value, str) else value
+
 
 PartNumber = Annotated[
     str,
@@ -12,6 +17,7 @@ PartNumber = Annotated[
         max_length=40,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9.-]*$",
     ),
+    BeforeValidator(normalize_part_number),
 ]
 
 

@@ -162,9 +162,10 @@ export function Inbox({ user }: { user: User }) {
       new URLSearchParams(location.search).get("conversation") ||
       sessionStorage.getItem(`crm-active-conversation:${user.id}`),
   );
-  const [filter, setFilter] = useState(
-    () => localStorage.getItem(`crm-dialog-filter:${user.id}`) || "all",
-  );
+  const [filter, setFilter] = useState(() => {
+    const saved = localStorage.getItem(`crm-dialog-filter:${user.id}`);
+    return saved && ["waiting_us", "mine", "ai_draft", "closed"].includes(saved) ? saved : "all";
+  });
   const [panelOpen, setPanelOpen] = useState(() => {
     const saved = localStorage.getItem(`crm-customer-panel:${user.id}`);
     return saved === null ? window.innerWidth >= 1100 : saved === "true";
@@ -320,7 +321,6 @@ export function Inbox({ user }: { user: User }) {
     params.set("state", filter);
   if (filter === "mine") params.set("assignee", "me");
   if (filter === "ai_draft") params.set("ai_draft", "true");
-  if (filter === "human") params.set("needs_human", "true");
   const conversations = useInfiniteQuery({
     queryKey: ["conversations", params.toString()],
     initialPageParam: 0,
@@ -732,14 +732,6 @@ export function Inbox({ user }: { user: User }) {
           onChange={(value) => void change({ assignee_id: value })}
         />
       </DetailField>
-      <Checkbox
-        size="xs"
-        label={t("human")}
-        checked={!!c?.needs_human}
-        disabled={!canWrite}
-        onChange={(e) => void change({ needs_human: e.currentTarget.checked })}
-      />
-
       <section className="crm-onec" aria-label={t("onecCustomer")}>
         <div
           className="crm-detail-heading"
@@ -878,18 +870,14 @@ export function Inbox({ user }: { user: User }) {
         </div>
       ))}
       {c && <ConversationTasks conversation={c} />}
-      {canWrite && (
+      {canWrite && c?.state === "closed" && (
         <Button
           mt="sm"
           fullWidth
           variant="default"
-          onClick={() =>
-            void change({
-              state: c?.state === "closed" ? "waiting_us" : "closed",
-            })
-          }
+          onClick={() => void change({ state: "waiting_us" })}
         >
-          {t(c?.state === "closed" ? "reopen" : "close")}
+          {t("reopen")}
         </Button>
       )}
     </div>
@@ -928,7 +916,7 @@ export function Inbox({ user }: { user: User }) {
               </Button>
             </Menu.Target>
             <Menu.Dropdown>
-              {["all", "waiting_us", "mine", "ai_draft", "human", "closed"].map(
+              {["all", "waiting_us", "mine", "ai_draft", "closed"].map(
                 (f) => (
                   <Menu.Item
                     key={f}
@@ -1018,11 +1006,6 @@ export function Inbox({ user }: { user: User }) {
                     title={taskLabel("taskUpdate")}
                   >
                     •
-                  </Badge>
-                )}
-                {item.needs_human && (
-                  <Badge size="xs" color="orange" title={t("human")}>
-                    Человек
                   </Badge>
                 )}
                 {item.unread_count > 0 && (
