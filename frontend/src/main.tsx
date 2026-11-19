@@ -570,6 +570,7 @@ function ProfileSettings({
   user: User;
   onSave: (value: User) => void;
 }) {
+  const { t } = useTranslation("v1");
   const [name, setName] = useState(user.display_name);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -596,7 +597,7 @@ function ProfileSettings({
   return (
     <form className="surface settings-card profile-settings" onSubmit={save}>
       <TextInput
-        label="Имя пользователя"
+        label={t("employeeName")}
         value={name}
         required
         maxLength={100}
@@ -682,6 +683,11 @@ function Workspace({
         try {
           const payload = JSON.parse(event.data);
           if (
+            payload.type === "team.changed" &&
+            payload.employee_id === user.id
+          )
+            void refreshSession().catch(() => {});
+          if (
             [
               "team.changed",
               "quick_replies.changed",
@@ -759,7 +765,7 @@ function Workspace({
       clearTimeout(timer);
       socket?.close();
     };
-  }, [query]);
+  }, [query, user.id]);
   useEffect(() => {
     let lastActivity = Date.now();
     let lastRefresh = 0;
@@ -912,11 +918,13 @@ function Workspace({
             {(user.display_name || user.email)[0].toUpperCase()}
           </div>
           <div className="user-meta">
-            <b>{user.email}</b>
-            <span className="sidebar-user-name" title={user.display_name}>
+            <b className="sidebar-user-name" title={user.display_name}>
               {user.display_name}
+            </b>
+            <span className="sidebar-user-email" title={user.email}>
+              {user.email}
             </span>
-            <small>{user.role === "admin" ? "Администратор" : user.role}</small>
+            <small>{t("v1:" + user.role)}</small>
           </div>
           <button
             className="logout"

@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
-from app.api.auth import admin_user, rate_limit
+from app.api.auth import EmployeeName, admin_user, rate_limit
 from app.core.config import config
 from app.core.db import get_db
 from app.core.security import hash_password, token_hash
@@ -32,6 +32,7 @@ def describe(user):
         for k in (
             "id",
             "email",
+            "display_name",
             "role",
             "active",
             "must_change_password",
@@ -43,6 +44,7 @@ def describe(user):
 
 class Invite(BaseModel):
     email: str = Field(min_length=3, max_length=254)
+    display_name: EmployeeName | None = None
     role: Literal["admin", "manager", "staff"] = "manager"
     send_email: bool = False
 
@@ -57,6 +59,7 @@ class Invite(BaseModel):
 
 class Access(BaseModel):
     version: int = Field(ge=1)
+    display_name: EmployeeName | None = None
     role: Literal["admin", "manager", "staff"]
     active: bool
 
@@ -108,7 +111,13 @@ def invite(body: Invite, actor=Depends(admin_user), db: Session = Depends(get_db
     lock_access(db)
     if db.scalar(select(User.id).where(User.email == body.email)):
         raise HTTPException(409, "Сотрудник с таким email уже существует")
-    user = User(email=body.email, role=body.role, password_hash="", access_version=1)
+    user = User(
+        email=body.email,
+        display_name=body.display_name,
+        role=body.role,
+        password_hash="",
+        access_version=1,
+    )
     db.add(user)
     db.flush()
     return issue(db, user, actor, body.send_email)
@@ -117,7 +126,7 @@ def invite(body: Invite, actor=Depends(admin_user), db: Session = Depends(get_db
 @router.patch("/admin/users/{user_id}")
 def access(user_id: str, body: Access, actor=Depends(admin_user), db: Session = Depends(get_db)):
     lock_access(db)
-    user = db.get(User, user_id, populate_existing=True)
+    user = db.get(User, user_id, with_for_update=True, populate_existing=True)
     if not user:
         raise HTTPException(404, "Сотрудник не найден")
     if user.access_version != body.version:
@@ -130,13 +139,21 @@ def access(user_id: str, body: Access, actor=Depends(admin_user), db: Session = 
         )
         if not another:
             raise HTTPException(409, "Нужен хотя бы один активный администратор")
-    user.role, user.active = body.role, body.active
+    access_changed = (user.role, user.active) != (body.role, body.active)
+    name_changed = body.display_name is not None and user.display_name != body.display_name
+    if not (access_changed or name_changed):
+        return describe(user)
+    if name_changed:
+        user.display_name = body.display_name
+        db.add(AuditEvent(user_id=actor.id, action="user.name_changed", target=user.id))
+    if access_changed:
+        user.role, user.active = body.role, body.active
+        db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+        db.execute(delete(UserAccessToken).where(UserAccessToken.user_id == user.id))
+        db.add(AuditEvent(user_id=actor.id, action="user.access_changed", target=user.id))
     user.access_version += 1
-    db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
-    db.execute(delete(UserAccessToken).where(UserAccessToken.user_id == user.id))
-    db.add(AuditEvent(user_id=actor.id, action="user.access_changed", target=user.id))
     db.commit()
-    emit("team.changed")
+    emit("team.changed", employee_id=user.id)
     return describe(user)
 
 

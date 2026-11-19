@@ -1,6 +1,8 @@
 import i18n from "./i18n";
 const ru = {
   employees: "Сотрудники",
+  employeeName: "Имя сотрудника",
+  unnamedEmployee: "Имя не указано",
   invite: "Пригласить сотрудника",
   inviteHint: "Одноразовая ссылка для установки пароля действует 24 часа.",
   role: "Роль",
@@ -60,6 +62,8 @@ const ru = {
 };
 const en = {
   employees: "Employees",
+  employeeName: "Employee name",
+  unnamedEmployee: "Name not set",
   invite: "Invite employee",
   inviteHint: "The single-use password setup link expires in 24 hours.",
   role: "Role",

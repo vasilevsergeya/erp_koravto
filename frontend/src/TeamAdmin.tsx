@@ -11,12 +11,13 @@ import {
   TextInput,
 } from "@mantine/core";
 import { useTranslation } from "react-i18next";
-import { api, type User } from "./api";
+import { api, refreshSession, type User } from "./api";
 import "./v1-i18n";
 
 type Member = {
   id: string;
   email: string;
+  display_name: string | null;
   role: string;
   active: boolean;
   must_change_password: boolean;
@@ -93,7 +94,8 @@ export function TeamAdmin({ user }: { user: User }) {
     queryKey: ["admin-users"],
     queryFn: () => api<Member[]>("/api/admin/users"),
   });
-  const [email, setEmail] = useState(""),
+  const [name, setName] = useState(""),
+    [email, setEmail] = useState(""),
     [role, setRole] = useState("manager"),
     [mail, setMail] = useState(false);
   const [busy, setBusy] = useState(false),
@@ -113,6 +115,8 @@ export function TeamAdmin({ user }: { user: User }) {
       setEdit(null);
       await query.invalidateQueries({ queryKey: ["admin-users"] });
       await query.invalidateQueries({ queryKey: ["team"] });
+      if (path === "/api/admin/users/" + user.id && method === "PATCH")
+        await refreshSession();
       return true;
     } catch (e) {
       setError(fail(e));
@@ -134,15 +138,26 @@ export function TeamAdmin({ user }: { user: User }) {
             e.preventDefault();
             if (
               await act("/api/admin/users", "POST", {
+                display_name: name.trim(),
                 email,
                 role,
                 send_email: mail,
               })
-            )
+            ) {
+              setName("");
               setEmail("");
+            }
           }}
         >
           <TextInput
+            required
+            label={t("employeeName")}
+            value={name}
+            maxLength={100}
+            onChange={(e) => setName(e.currentTarget.value)}
+          />
+          <TextInput
+            mt="sm"
             type="email"
             required
             label="Email"
@@ -163,7 +178,7 @@ export function TeamAdmin({ user }: { user: User }) {
             checked={mail}
             onChange={(e) => setMail(e.currentTarget.checked)}
           />
-          <Button mt="md" type="submit" loading={busy}>
+          <Button mt="md" type="submit" loading={busy} disabled={!name.trim()}>
             {t("invite")}
           </Button>
         </form>
@@ -173,7 +188,8 @@ export function TeamAdmin({ user }: { user: User }) {
         {data.data?.map((m) => (
           <div className="setting-row" key={m.id}>
             <div style={{ minWidth: 0, overflowWrap: "anywhere" }}>
-              <b>{m.email}</b>
+              <b>{m.display_name || t("unnamedEmployee")}</b>
+              <p>{m.email}</p>
               <p>
                 {t(m.role)} · {t(m.active ? "active" : "inactive")}{" "}
                 {m.must_change_password && (
@@ -183,10 +199,10 @@ export function TeamAdmin({ user }: { user: User }) {
             </div>
             <Button
               variant="light"
-              disabled={m.id === user.id || busy}
+              disabled={busy}
               onClick={() => setEdit({ ...m })}
             >
-              {t("access")}
+              {t("edit")}
             </Button>
           </div>
         ))}
@@ -199,7 +215,17 @@ export function TeamAdmin({ user }: { user: User }) {
       >
         {edit && (
           <>
+            <TextInput
+              label={t("employeeName")}
+              value={edit.display_name ?? ""}
+              maxLength={100}
+              onChange={(e) =>
+                setEdit({ ...edit, display_name: e.currentTarget.value })
+              }
+            />
             <Select
+              mt="sm"
+              disabled={edit.id === user.id}
               label={t("role")}
               data={roles}
               value={edit.role}
@@ -207,17 +233,21 @@ export function TeamAdmin({ user }: { user: User }) {
             />
             <Checkbox
               mt="md"
+              disabled={edit.id === user.id}
               label={t("active")}
               checked={edit.active}
               onChange={(e) =>
                 setEdit({ ...edit, active: e.currentTarget.checked })
               }
             />
-            <p>{t("accessHint")}</p>
+            {edit.id !== user.id && <p>{t("accessHint")}</p>}
             <Button
+              mt="md"
+              disabled={edit.display_name !== null && !edit.display_name.trim()}
               loading={busy}
               onClick={() =>
                 void act("/api/admin/users/" + edit.id, "PATCH", {
+                  display_name: edit.display_name?.trim(),
                   role: edit.role,
                   active: edit.active,
                   version: edit.access_version,
@@ -231,7 +261,7 @@ export function TeamAdmin({ user }: { user: User }) {
               color="orange"
               variant="light"
               fullWidth
-              disabled={!edit.active || busy}
+              disabled={edit.id === user.id || !edit.active || busy}
               onClick={() => {
                 if (window.confirm(t("resetConfirm")))
                   void act(

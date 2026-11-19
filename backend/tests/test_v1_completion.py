@@ -98,7 +98,7 @@ class CompletionTests(unittest.TestCase):
         return client
 
     def test_invite_single_use_seven_character_password_and_no_implicit_email(self):
-        body = {"email": uid() + "@example.invalid", "role": "manager"}
+        body = {"email": uid() + "@example.invalid", "role": "manager", "display_name": "  Анна  "}
         self.assertEqual(self.staff_client.post("/api/admin/users", json=body).status_code, 403)
         self.assertEqual(self.manager_client.get("/api/admin/users").status_code, 403)
         with patch("app.api.team_admin.smtp_send") as send:
@@ -106,7 +106,20 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             send.assert_not_called()
         data = response.json()
+        self.assertEqual(data["user"]["display_name"], "Анна")
         token = urlsplit(data["url"]).fragment.removeprefix("access=")
+        self.assertEqual(
+            self.client.patch(
+                "/api/admin/users/" + data["user"]["id"],
+                json={
+                    "role": "manager",
+                    "active": True,
+                    "version": data["user"]["access_version"],
+                    "display_name": "Анна Петрова",
+                },
+            ).status_code,
+            200,
+        )
         with SessionLocal() as db:
             self.assertIsNotNone(db.get(UserAccessToken, token_hash(token)))
             self.assertIsNone(db.get(UserAccessToken, token))
@@ -137,6 +150,40 @@ class CompletionTests(unittest.TestCase):
             ).status_code,
             200,
         )
+
+    def test_employee_rename_updates_session_and_historical_message(self):
+        cid = uid()
+        with SessionLocal() as db:
+            db.add(Conversation(id=cid, channel_id="test", chat_id=cid))
+            db.flush()
+            db.add(
+                Message(
+                    conversation_id=cid,
+                    channel_id="test",
+                    external_id=uid(),
+                    direction="out",
+                    author_type="user",
+                    author_id=self.manager,
+                    body="OK",
+                )
+            )
+            db.commit()
+        path = "/api/admin/users/" + self.manager
+        change = {"role": "manager", "active": True, "version": 1, "display_name": "  Ирина  "}
+        self.assertEqual(self.manager_client.patch(path, json=change).status_code, 403)
+        self.assertEqual(
+            self.client.patch(path, json={**change, "display_name": "  "}).status_code, 422
+        )
+        self.assertEqual(self.client.patch(path, json=change).json()["display_name"], "Ирина")
+        self.assertEqual(self.manager_client.get("/api/auth/me").json()["display_name"], "Ирина")
+        messages = self.manager_client.get(f"/api/conversations/{cid}/messages").json()
+        self.assertEqual(messages[0]["author_name"], "Ирина")
+        self.assertEqual(self.client.patch(path, json=change).status_code, 409)
+        own = {**change, "role": "admin", "display_name": "Сергей"}
+        self.assertEqual(
+            self.client.patch("/api/admin/users/" + self.admin, json=own).status_code, 200
+        )
+        self.assertEqual(self.client.get("/api/auth/me").json()["display_name"], "Сергей")
 
     def test_access_changes_revoke_sessions_and_reset_links(self):
         own = next(r for r in self.client.get("/api/admin/users").json() if r["id"] == self.admin)

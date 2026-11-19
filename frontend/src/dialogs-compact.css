@@ -197,7 +197,10 @@
   line-height: 14px;
 }
 .crm-message-author {
-  font-size: 9px;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0;
 }
 .crm-message-menu {
@@ -708,7 +711,9 @@
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
-.sidebar-user-name { display: block; color: #d3dce2; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-meta .sidebar-user-name, .sidebar-user-email { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-meta .sidebar-user-name { font-size: 11px; }
+.sidebar-user-email { color: #b7c5cf; font-size: 10px; }
 .profile-settings { max-width: 520px; margin-bottom: 20px; display: grid; gap: 12px; justify-items: start; }
 .profile-settings .mantine-TextInput-root { width: 100%; }
 .navigation-collapsed .nav-count { position: absolute; top: 0; right: 0; font-size: 9px; padding: 0 3px; }

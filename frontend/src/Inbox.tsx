@@ -1316,16 +1316,22 @@ export function Inbox({ user }: { user: User }) {
                     {m.error_text && (
                       <p className="crm-message-error">{m.error_text}</p>
                     )}
-                    <footer>
+                    <footer dir="ltr">
                       {(m.direction === "out" ||
                         m.is_private_note ||
                         m.author_type === "system") && (
-                        <span className="crm-message-author">
+                        <span
+                          className="crm-message-author"
+                          title={m.author_name || undefined}
+                        >
                           {m.is_private_note ? t("privateNote") + " · " : ""}
-                          {m.author_name ||
-                            (m.author_type === "system"
-                              ? taskLabel("system")
-                              : t(m.author_type))}
+                          {m.author_name ? (
+                            <bdi>{m.author_name}</bdi>
+                          ) : m.author_type === "system" ? (
+                            taskLabel("system")
+                          ) : (
+                            t(m.author_type)
+                          )}
                         </span>
                       )}
                       {m.edited && <span>{t("edited")}</span>}

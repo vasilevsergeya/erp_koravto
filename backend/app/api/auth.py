@@ -1,10 +1,10 @@
 import logging
 import secrets
 from datetime import timedelta
-from typing import NoReturn, cast
+from typing import Annotated, NoReturn, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 from redis import RedisError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -137,8 +137,21 @@ def me(auth=Depends(auth_session)):
     return describe(*auth)
 
 
+def printable_name(value: str) -> str:
+    if not value.isprintable():
+        raise ValueError("Введите имя сотрудника")
+    return value
+
+
+EmployeeName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+    AfterValidator(printable_name),
+]
+
+
 class ProfileInput(BaseModel):
-    display_name: str = Field(min_length=1, max_length=100)
+    display_name: EmployeeName
 
 
 @router.put("/profile")
@@ -148,12 +161,13 @@ def update_profile(
     user=Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    name = body.display_name.strip()
-    if not name or not name.isprintable():
-        raise HTTPException(422, "Введите имя пользователя")
-    user.display_name = name
+    user = db.get(User, user.id, with_for_update=True, populate_existing=True)
+    if user.display_name == body.display_name:
+        return describe(auth[0], user)
+    user.display_name = body.display_name
+    user.access_version += 1
     db.commit()
-    emit("team.changed")
+    emit("team.changed", employee_id=user.id)
     return describe(auth[0], user)
 
 
