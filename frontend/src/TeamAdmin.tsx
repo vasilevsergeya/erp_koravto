@@ -12,6 +12,7 @@ import {
 } from "@mantine/core";
 import { useTranslation } from "react-i18next";
 import { api, refreshSession, type User } from "./api";
+import { invalidateTeamQueries } from "./team";
 import "./v1-i18n";
 
 type Member = {
@@ -113,8 +114,7 @@ export function TeamAdmin({ user }: { user: User }) {
       const result = await api<Link>(path, method, body);
       if (result.url) setLink(result);
       setEdit(null);
-      await query.invalidateQueries({ queryKey: ["admin-users"] });
-      await query.invalidateQueries({ queryKey: ["team"] });
+      await invalidateTeamQueries(query);
       if (path === "/api/admin/users/" + user.id && method === "PATCH")
         await refreshSession();
       return true;

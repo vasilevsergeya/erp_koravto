@@ -1,8 +1,10 @@
+import { memberOptions, type Member } from "./team";
 import { openConversation } from "./customer-api";
 import Markdown from "react-markdown";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ActionIcon,
   Alert,
   Badge,
   Button,
@@ -19,7 +21,7 @@ import {
   Textarea,
   TextInput,
 } from "@mantine/core";
-import { Bell, GripVertical, Plus, Settings2 } from "lucide-react";
+import { Bell, GripVertical, Pencil, Plus, Settings2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api, uploadFile, type Conversation, type User } from "./api";
 import { taskLabel } from "./task-i18n";
@@ -42,7 +44,6 @@ type Board = {
   statuses: Status[];
 };
 type Kind = { id: string; name: string; active: boolean; position: number };
-type Member = { id: string; name: string; role: string };
 type Task = {
   id: string;
   code: string;
@@ -94,6 +95,7 @@ type Detail = Task & {
 };
 type TaskPage = { items: Task[]; total: number };
 type TaskEvent = {
+  boardId?: string;
   key?: string;
   conversation?: Conversation;
   customer?: { id: string; name: string };
@@ -119,10 +121,11 @@ export const openTask = (key: string) =>
 export const createTask = (
   conversation?: Conversation,
   customer?: { id: string; name: string },
+  boardId?: string,
 ) =>
   window.dispatchEvent(
     new CustomEvent<TaskEvent>("crm:task", {
-      detail: { conversation, customer },
+      detail: { conversation, customer, boardId },
     }),
   );
 const currentTask = () =>
@@ -196,12 +199,16 @@ function refresh(query: ReturnType<typeof useQueryClient>) {
 }
 
 function TaskForm({
+  userId,
+  initialBoardId,
   task,
   conversation,
   customer,
   onDone,
   onCancel,
 }: {
+  userId: string;
+  initialBoardId?: string;
   task?: Detail;
   conversation?: Conversation;
   customer?: { id: string; name: string };
@@ -216,7 +223,7 @@ function TaskForm({
   );
   const [title, setTitle] = useState(task?.title || "");
   const [description, setDescription] = useState(task?.description || "");
-  const [boardId, setBoard] = useState(task?.board_id || "");
+  const [boardId, setBoard] = useState(task?.board_id || initialBoardId || "");
   const [statusId, setStatus] = useState(task?.status_id || "");
   const [typeId, setType] = useState(task?.type_id || "");
   const [priority, setPriority] = useState(task?.priority || "normal");
@@ -372,15 +379,26 @@ function TaskForm({
           value={priority}
           onChange={(v) => setPriority(v || "normal")}
         />
-        <Select
-          label={t("assignee")}
-          data={options(team.data)}
-          value={assignee}
-          onChange={setAssignee}
-          searchable
-          clearable
-          placeholder={t("unassigned")}
-        />
+        <div>
+          <Select
+            label={t("assignee")}
+            data={memberOptions(team.data)}
+            value={assignee}
+            onChange={setAssignee}
+            searchable
+            clearable
+            placeholder={t("unassigned")}
+          />
+          {assignee !== userId && (
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              onClick={() => setAssignee(userId)}
+            >
+              {t("assignMe")}
+            </Button>
+          )}
+        </div>
         <TextInput
           type={dateOnly ? "date" : "datetime-local"}
           label={t("due") + " · " + zone}
@@ -403,7 +421,7 @@ function TaskForm({
       />
       <MultiSelect
         label={t("watchers")}
-        data={options(team.data)}
+        data={memberOptions(team.data)}
         value={watchers}
         onChange={setWatchers}
         searchable
@@ -487,11 +505,12 @@ function TaskForm({
   );
 }
 
-export function TaskDialogs() {
+export function TaskDialogs({ user }: { user: User }) {
   const { t } = useTranslation("tasks");
   const query = useQueryClient();
   const [key, setKey] = useState<string | null>(currentTask);
   const [creating, setCreating] = useState(false);
+  const [initialBoardId, setInitialBoardId] = useState<string>();
   const [conversation, setConversation] = useState<Conversation>();
   const [customer, setCustomer] = useState<{ id: string; name: string }>();
   const [editing, setEditing] = useState(false);
@@ -520,6 +539,7 @@ export function TaskDialogs() {
       setMentions([]);
       setKey(d.key || null);
       setCreating(!d.key);
+      setInitialBoardId(d.boardId);
       setConversation(d.conversation);
       setCustomer(d.customer);
       if (d.key) history.pushState({}, "", "/tasks/" + d.key);
@@ -594,6 +614,8 @@ export function TaskDialogs() {
     <>
       <Modal opened={creating} onClose={close} title={t("create")} size="lg">
         <TaskForm
+          userId={user.id}
+          initialBoardId={initialBoardId}
           conversation={conversation}
           customer={customer}
           onDone={saved}
@@ -612,6 +634,7 @@ export function TaskDialogs() {
         {task &&
           (editing ? (
             <TaskForm
+              userId={user.id}
               key={task.id}
               task={task}
               onDone={saved}
@@ -723,7 +746,7 @@ export function TaskDialogs() {
               />
               <MultiSelect
                 label={t("mention")}
-                data={options(catalogs.team.data)}
+                data={memberOptions(catalogs.team.data)}
                 value={mentions}
                 onChange={setMentions}
                 searchable
@@ -959,7 +982,7 @@ function AssignmentReport({
       : {},
   );
   const report = useQuery({
-    queryKey: ["task-report", params.toString()],
+    queryKey: ["task-report", user.id, params.toString()],
     queryFn: () =>
       api<{ rows: ReportRow[] }>("/api/reports/assignments?" + params),
     enabled: valid,
@@ -1095,6 +1118,12 @@ function taskDragImage(event: React.DragEvent<HTMLElement>) {
   return rect.height;
 }
 
+type BoardAction = {
+  kind: "settings" | "addBoard" | "editBoard" | "addColumn" | "editColumn";
+  boardId?: string;
+  statusId?: string;
+};
+
 export function TasksPage({ user }: { user: User }) {
   const { t } = useTranslation("tasks");
   const query = useQueryClient();
@@ -1106,7 +1135,7 @@ export function TasksPage({ user }: { user: User }) {
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
-  const [settings, setSettings] = useState(false);
+  const [settings, setSettings] = useState<BoardAction | null>(null);
   const [drag, setDrag] = useState<{ task: Task; height: number } | null>(null);
   const [dropColumn, setDropColumn] = useState<string | null>(null);
   const [moving, setMoving] = useState<{ task: Task; status: string } | null>(
@@ -1128,7 +1157,7 @@ export function TasksPage({ user }: { user: User }) {
     offset: String(page * 100),
   });
   const tasks = useQuery({
-    queryKey: ["tasks", params.toString()],
+    queryKey: ["tasks", user.id, params.toString()],
     queryFn: () => api<TaskPage>("/api/tasks?" + params),
     refetchInterval: 15000,
     enabled: mode !== "report",
@@ -1176,18 +1205,42 @@ export function TasksPage({ user }: { user: User }) {
               {t(m)}
             </Button>
           ))}
+          <Button
+            variant="light"
+            onClick={() => {
+              setMode("list");
+              setSearch("");
+              setFilters({ view: "mine" });
+              setPage(0);
+            }}
+          >
+            {t("myOpenTasks")}
+          </Button>
         </div>
         <div className="task-actions">
           {user.role === "admin" && (
             <Button
               variant="default"
               leftSection={<Settings2 size={16} />}
-              onClick={() => setSettings(true)}
+              onClick={() => setSettings({ kind: "settings", boardId: board })}
             >
               {t("settings")}
             </Button>
           )}
-          <Button leftSection={<Plus size={16} />} onClick={() => createTask()}>
+          <Button
+            leftSection={<Plus size={16} />}
+            onClick={() =>
+              createTask(
+                undefined,
+                undefined,
+                selectedBoard &&
+                  !selectedBoard.archived &&
+                  (mode === "kanban" || filters.board_id)
+                  ? selectedBoard.id
+                  : undefined,
+              )
+            }
+          >
             {t("create")}
           </Button>
         </div>
@@ -1252,7 +1305,7 @@ export function TasksPage({ user }: { user: User }) {
             <Select
               aria-label={t("author")}
               placeholder={t("author")}
-              data={options(team.data)}
+              data={memberOptions(team.data)}
               value={filters.author_id || null}
               onChange={(v) => change("author_id", v)}
               clearable
@@ -1263,7 +1316,7 @@ export function TasksPage({ user }: { user: User }) {
               placeholder={t("assignee")}
               data={[
                 { value: "unassigned", label: t("unassigned") },
-                ...options(team.data),
+                ...memberOptions(team.data),
               ]}
               value={filters.assignee_id || null}
               onChange={(v) => change("assignee_id", v)}
@@ -1307,6 +1360,28 @@ export function TasksPage({ user }: { user: User }) {
             <Alert color="red">
               {error || errorText(tasks.error || boards.error)}
             </Alert>
+          )}
+          {mode === "kanban" && user.role === "admin" && (
+            <div className="task-board-actions">
+              <Button
+                variant="light"
+                leftSection={<Plus size={16} />}
+                onClick={() => setSettings({ kind: "addBoard" })}
+              >
+                {t("addBoard")}
+              </Button>
+              {selectedBoard && (
+                <Button
+                  variant="default"
+                  leftSection={<Pencil size={14} />}
+                  onClick={() =>
+                    setSettings({ kind: "editBoard", boardId: board })
+                  }
+                >
+                  {t("editBoard")}
+                </Button>
+              )}
+            </div>
           )}
           {tasks.isLoading && <Loader />}
           {mode === "kanban" ? (
@@ -1374,6 +1449,24 @@ export function TasksPage({ user }: { user: User }) {
                       <i style={{ background: status.color }} />
                       {status.name}
                       <span>{column.length}</span>
+                      {user.role === "admin" && (
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          size="sm"
+                          aria-label={t("editColumn") + " · " + status.name}
+                          title={t("editColumn")}
+                          onClick={() =>
+                            setSettings({
+                              kind: "editColumn",
+                              boardId: board,
+                              statusId: status.id,
+                            })
+                          }
+                        >
+                          <Pencil size={14} />
+                        </ActionIcon>
+                      )}
                     </h3>
                     {cards.map((task) =>
                       target && task.id === drag.task.id ? (
@@ -1444,6 +1537,17 @@ export function TasksPage({ user }: { user: User }) {
                   </section>
                 );
               })}
+              {selectedBoard && user.role === "admin" && (
+                <Button
+                  variant="light"
+                  leftSection={<Plus size={16} />}
+                  onClick={() =>
+                    setSettings({ kind: "addColumn", boardId: board })
+                  }
+                >
+                  {t("addColumn")}
+                </Button>
+              )}
             </div>
           ) : (
             <div className="surface task-table">
@@ -1526,34 +1630,52 @@ export function TasksPage({ user }: { user: User }) {
         </>
       )}
       <Modal
-        opened={settings}
-        onClose={() => setSettings(false)}
-        title={t("settings")}
+        opened={!!settings}
+        onClose={() => setSettings(null)}
+        title={settings && t(settings.kind)}
         size="xl"
       >
-        <BoardSettings />
+        {settings && (
+          <BoardSettings
+            action={settings}
+            onSaved={(updated) => {
+              if (updated) change("board_id", updated.id);
+              setSettings(null);
+            }}
+          />
+        )}
       </Modal>
     </div>
   );
 }
 
-function BoardSettings() {
+function BoardSettings({
+  action,
+  onSaved,
+}: {
+  action: BoardAction;
+  onSaved: (board?: Board) => void;
+}) {
   const { t } = useTranslation("tasks");
   const query = useQueryClient();
   const { boards, types } = useCatalogs();
-  const [boardId, setBoardId] = useState<string | null>(null);
-  const [newBoard, setNewBoard] = useState("");
+  const [boardId, setBoardId] = useState<string | null>(action.boardId || null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const board = boards.data?.find((b) => b.id === boardId) || boards.data?.[0];
+  const board =
+    boards.data?.find((b) => b.id === boardId) ||
+    (!boardId ? boards.data?.[0] : undefined);
+  const full = action.kind === "settings";
   async function run(path: string, method: string, body?: unknown) {
     setBusy(true);
     setError("");
     try {
-      await api(path, method, body);
+      const result = await api<Board>(path, method, body);
       for (const key of ["boards", "task-types"])
         await query.invalidateQueries({ queryKey: [key] });
-      refresh(query);
+      await refresh(query);
+      if (path === "/api/boards" && method === "POST") onSaved(result);
+      else if (!full) onSaved();
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -1562,94 +1684,100 @@ function BoardSettings() {
   }
   return (
     <div className="task-form">
-      <p className="muted">{t("tasksSettingsHint")}</p>
+      {full && <p className="muted">{t("tasksSettingsHint")}</p>}
       {error && <Alert color="red">{error}</Alert>}
-      <Select
-        label={t("board")}
-        data={options(boards.data)}
-        value={board?.id || null}
-        onChange={setBoardId}
-      />
-      {board && (
-        <>
-          <BoardEditor
-            key={board.id + board.name + board.archived + board.position}
+      {full && (
+        <Select
+          label={t("board")}
+          data={options(boards.data)}
+          value={board?.id || null}
+          onChange={setBoardId}
+        />
+      )}
+      {board && (full || action.kind === "editBoard") && (
+        <BoardEditor
+          key={board.id + board.name + board.archived + board.position}
+          board={board}
+          busy={busy}
+          run={run}
+        />
+      )}
+      {board?.statuses
+        .filter(
+          (status) =>
+            full ||
+            (action.kind === "editColumn" && status.id === action.statusId),
+        )
+        .map((status) => (
+          <StatusEditor
+            key={
+              status.id +
+              status.name +
+              status.position +
+              status.color +
+              status.terminal
+            }
+            status={status}
             board={board}
             busy={busy}
             run={run}
           />
-          {board.statuses.map((status) => (
-            <StatusEditor
-              key={
-                status.id +
-                status.name +
-                status.position +
-                status.color +
-                status.terminal
-              }
-              status={status}
-              board={board}
+        ))}
+      {board && (full || action.kind === "addColumn") && (
+        <StatusEditor
+          key={board.id + "new" + board.statuses.length}
+          board={board}
+          busy={busy}
+          run={run}
+        />
+      )}
+      {(full || action.kind === "addBoard") && (
+        <BoardEditor
+          busy={busy}
+          run={run}
+          nextPosition={boards.data?.length || 0}
+        />
+      )}
+      {full && (
+        <>
+          <h3>{t("types")}</h3>
+          {types.data?.map((kind) => (
+            <TypeEditor
+              key={kind.id + kind.name + kind.active}
+              kind={kind}
               busy={busy}
               run={run}
             />
           ))}
-          <StatusEditor
-            key={board.id + "new" + board.statuses.length}
-            board={board}
-            busy={busy}
-            run={run}
-          />
+          <TypeEditor key={"new" + types.data?.length} busy={busy} run={run} />
         </>
       )}
-      <div className="task-actions">
-        <TextInput
-          label={t("boardName")}
-          value={newBoard}
-          onChange={(e) => setNewBoard(e.currentTarget.value)}
-        />
-        <Button
-          disabled={busy || !newBoard.trim()}
-          onClick={() =>
-            void run("/api/boards", "POST", {
-              name: newBoard,
-              position: boards.data?.length || 0,
-            })
-          }
-        >
-          {t("addBoard")}
-        </Button>
-      </div>
-      <h3>{t("types")}</h3>
-      {types.data?.map((kind) => (
-        <TypeEditor
-          key={kind.id + kind.name + kind.active}
-          kind={kind}
-          busy={busy}
-          run={run}
-        />
-      ))}
-      <TypeEditor key={"new" + types.data?.length} busy={busy} run={run} />
     </div>
   );
 }
 type Runner = (path: string, method: string, body?: unknown) => Promise<void>;
 function BoardEditor({
   board,
+  nextPosition = 0,
   busy,
   run,
 }: {
-  board: Board;
+  board?: Board;
+  nextPosition?: number;
   busy: boolean;
   run: Runner;
 }) {
   const { t } = useTranslation("tasks");
-  const [name, setName] = useState(board.name);
-  const [position, setPosition] = useState<number | string>(board.position);
-  const [archived, setArchived] = useState(board.archived);
+  const [name, setName] = useState(board?.name || "");
+  const [position, setPosition] = useState<number | string>(
+    board?.position ?? nextPosition,
+  );
+  const [archived, setArchived] = useState(board?.archived || false);
   return (
     <div className="task-settings-row">
       <TextInput
         label={t("boardName")}
+        maxLength={80}
         value={name}
         onChange={(e) => setName(e.currentTarget.value)}
       />
@@ -1659,22 +1787,28 @@ function BoardEditor({
         min={0}
         onChange={setPosition}
       />
-      <Checkbox
-        label={t("archived")}
-        checked={archived}
-        onChange={(e) => setArchived(e.currentTarget.checked)}
-      />
+      {board && (
+        <Checkbox
+          label={t("archived")}
+          checked={archived}
+          onChange={(e) => setArchived(e.currentTarget.checked)}
+        />
+      )}
       <Button
         disabled={busy || !name.trim()}
         onClick={() =>
-          void run("/api/boards/" + board.id, "PUT", {
-            name,
-            position: Number(position),
-            archived,
-          })
+          void run(
+            board ? "/api/boards/" + board.id : "/api/boards",
+            board ? "PUT" : "POST",
+            {
+              name,
+              position: Number(position),
+              archived,
+            },
+          )
         }
       >
-        {t("save")}
+        {t(board ? "save" : "addBoard")}
       </Button>
     </div>
   );
@@ -1705,6 +1839,7 @@ function StatusEditor({
       <div className="task-settings-row">
         <TextInput
           label={t("statusName")}
+          maxLength={80}
           value={name}
           onChange={(e) => setName(e.currentTarget.value)}
         />

@@ -1,6 +1,7 @@
 import asyncio
 import mimetypes
 import uuid
+from collections import Counter
 from datetime import timedelta
 from typing import Literal
 from urllib.parse import quote
@@ -795,9 +796,16 @@ def channels_adapter(db: Session):
 
 @router.get("/team")
 def team(user=Depends(current_user), db: Session = Depends(get_db)):
+    members = db.scalars(select(User).where(User.active).order_by(User.email)).all()
+    names = Counter(member.name.casefold() for member in members)
     return [
-        {"id": u.id, "name": u.name, "role": u.role}
-        for u in db.scalars(select(User).where(User.active))
+        {
+            "id": u.id,
+            "name": u.name,
+            "role": u.role,
+            "label": f"{u.name} ({u.email})" if names[u.name.casefold()] > 1 else u.name,
+        }
+        for u in members
     ]
 
 

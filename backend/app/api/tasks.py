@@ -624,6 +624,14 @@ class StatusInput(Input):
     position: int = Field(0, ge=0, le=1000)
 
 
+def place_status(board, status):
+    """Insert at the requested slot, including when another column already occupies it."""
+    ordered = sorted(board.statuses, key=lambda item: item["position"])
+    ordered = [item for item in ordered if item["id"] != status["id"]]
+    ordered.insert(status["position"], status)
+    board.statuses = [{**item, "position": i} for i, item in enumerate(ordered)]
+
+
 @router.post("/boards/{board_id}/statuses", status_code=201)
 def create_status(
     board_id: str, body: StatusInput, user=Depends(admin_user), db: Session = Depends(get_db)
@@ -631,7 +639,7 @@ def create_status(
     board = board_row(db, board_id, lock=True)
     if len(board.statuses) >= 20 or any(s["name"] == body.name for s in board.statuses):
         raise HTTPException(400, "Имя занято или достигнут лимит 20 статусов")
-    board.statuses = [*board.statuses, {**body.model_dump(), "id": uid()}]
+    place_status(board, {**body.model_dump(), "id": uid()})
     db.add(AuditEvent(user_id=user.id, action="board.status_created", target=board.id))
     db.commit()
     publish_tasks()
@@ -657,10 +665,11 @@ def edit_status(
             409,
             "В статусе есть задачи. Создайте новый статус и перенесите задачи при удалении старого",
         )
-    board.statuses = [
-        {**body.model_dump(), "id": status_id} if s["id"] == status_id else s
-        for s in board.statuses
-    ]
+    updated = {**body.model_dump(), "id": status_id}
+    if body.position == old["position"]:
+        board.statuses = [updated if s["id"] == status_id else s for s in board.statuses]
+    else:
+        place_status(board, updated)
     db.add(AuditEvent(user_id=user.id, action="board.status_updated", target=board.id))
     db.commit()
     publish_tasks()

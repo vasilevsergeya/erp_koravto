@@ -1,3 +1,4 @@
+import { memberOptions, type Member } from "./team";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -122,7 +123,7 @@ function ProfileForm({
   const team = useQuery({
     queryKey: ["team"],
     queryFn: () =>
-      api<{ id: string; name: string; role: string }[]>("/api/team"),
+      api<Member[]>("/api/team"),
   });
   async function save() {
     setBusy(true);
@@ -210,9 +211,7 @@ function ProfileForm({
           clearable
           value={owner}
           onChange={setOwner}
-          data={(team.data || [])
-            .filter((u) => u.role !== "staff")
-            .map((u) => ({ value: u.id, label: u.name }))}
+          data={memberOptions(team.data?.filter((u) => u.role !== "staff"))}
         />
       </div>
       <TranslationFields

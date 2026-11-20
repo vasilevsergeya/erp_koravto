@@ -111,6 +111,22 @@ test('old refresh response cannot expire a new login', async () => {
   await assert.rejects(old, mod.SessionExpiredError); assert.equal(notices, 0);
 });
 
+test('renaming a profile preserves in-flight counts for the same session', async () => {
+  const mod = await setup(); const gate = deferred();
+  globalThis.fetch = async () => { await gate.promise; return response(200, {open_tasks: 1}); };
+  const pending = mod.api('/api/conversations/counts');
+  mod.setSession({...user, display_name: 'New name'}); gate.resolve();
+  assert.equal((await pending).open_tasks, 1);
+});
+
+test('a replacement login for the same ID still invalidates old requests', async () => {
+  const mod = await setup(); const gate = deferred();
+  globalThis.fetch = async () => { await gate.promise; return response(200, user); };
+  const pending = mod.api('/api/auth/profile', 'PUT', {display_name: 'Old session'});
+  mod.setSession({...user, csrf_token: 'different-session'}); gate.resolve();
+  await assert.rejects(pending, mod.SessionExpiredError);
+});
+
 test('old protected request is not retried after a new login', async () => {
   const mod = await setup(); const gate = deferred(); let calls = 0;
   globalThis.fetch = async () => { calls++; await gate.promise; return response(401); };

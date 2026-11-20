@@ -1,3 +1,4 @@
+import { memberOptions, type Member } from "./team";
 import {
   Fragment,
   type ReactNode,
@@ -69,7 +70,6 @@ type Channel = {
   state: string;
   transport: string;
 };
-type Member = { id: string; name: string; role: string };
 type OneCCustomer = {
   status: string;
   clients: OneCClient[];
@@ -726,9 +726,7 @@ export function Inbox({ user }: { user: User }) {
           value={c?.assignee_id || null}
           clearable
           comboboxProps={{ withinPortal: false }}
-          data={(team.data || [])
-            .filter((u) => u.role !== "staff")
-            .map((u) => ({ value: u.id, label: u.name }))}
+          data={memberOptions(team.data?.filter((u) => u.role !== "staff"))}
           onChange={(value) => void change({ assignee_id: value })}
         />
       </DetailField>

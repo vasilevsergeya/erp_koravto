@@ -139,6 +139,73 @@ class TasksAcceptance(unittest.TestCase):
             task = self.change(task, status_id=self.statuses[0]["id"])
             self.assertEqual(count(self.client), 1)
 
+    def test_rename_preserves_personal_work_with_identical_employee_names(self):
+        client = self.staff_client
+        task, _ = self.create(client=client, watchers=[self.other])
+        self.create(assignee_id=self.other)
+        self.create(status_id=self.statuses[3]["id"])
+        path = "/api/tasks/" + task["id"]
+        client.post(path + "/comments", json={"text": "Checking", "mentions": [self.other]})
+        for actor in (self.client, client):
+            self.assertEqual(
+                actor.put("/api/auth/profile", json={"display_name": "Алексей"}).status_code, 200
+            )
+        for member_id, actor in ((self.staff, client), (self.admin, self.client)):
+            self.assertEqual(actor.get("/api/auth/me").json()["id"], member_id)
+        team = client.get("/api/team").json()
+        twins = [m for m in team if m["name"] == "Алексей" and m["id"] in (self.staff, self.admin)]
+        self.assertEqual(len({m["label"] for m in twins}), 2)
+        for actor, expected in ((client, [task["id"]]), (self.client, [])):
+            self.assertEqual(actor.get("/api/conversations/counts").json()["open_tasks"], len(expected))
+            mine = actor.get("/api/tasks", params={"view": "mine"}).json()["items"]
+            self.assertEqual([t["id"] for t in mine], expected)
+        detail = client.get(path).json()
+        self.assertEqual(detail["assignee_id"], self.staff)
+        self.assertEqual(detail["author_id"], self.staff)
+        self.assertEqual(detail["assignee_name"], "Алексей")
+        self.assertEqual(detail["watchers"], [self.other])
+        self.assertEqual(detail["comments"][0]["author_name"], "Алексей")
+        self.assertEqual(detail["comments"][0]["mentions"], [self.other])
+        params = {"board_id": self.board, "start": (now() - timedelta(days=1)).isoformat(),
+                  "end": (now() + timedelta(days=1)).isoformat()}
+        rows = client.get("/api/reports/assignments", params=params).json()["rows"]
+        row = next(r for r in rows if r["author_id"] == r["assignee_id"] == self.staff)
+        self.assertEqual((row["open"], row["assignee_name"]), (1, "Алексей"))
+
+    def test_only_admins_can_change_board_structure(self):
+        board = "/api/boards/" + self.board
+        status = board + "/statuses/" + self.statuses[0]["id"]
+        with self.session(self.other) as manager:
+            for client in (manager, self.staff_client):
+                for method, path, body in [
+                    ("POST", "/api/boards", {"name": "Test board"}),
+                    ("PUT", board, {"name": "Renamed board"}),
+                    ("POST", board + "/statuses", {"name": "New column"}),
+                    ("PUT", status, {"name": "Renamed column"}),
+                    ("DELETE", status + "?move_to=" + self.statuses[1]["id"], None),
+                ]:
+                    with self.subTest(method=method, path=path):
+                        self.assertEqual(client.request(method, path, json=body).status_code, 403)
+
+    def test_edit_board_and_column_preserves_existing_cards(self):
+        task, _ = self.create()
+        board = "/api/boards/" + self.board
+        name = uid()
+        self.assertEqual(self.client.put(board, json={"name": name, "position": 3}).status_code, 200)
+        old_id = self.statuses[0]["id"]
+        added = self.client.post(board + "/statuses", json={"name": "Проверка", "position": 0})
+        self.assertEqual(added.status_code, 201, added.text)
+        self.assertEqual(added.json()["statuses"][0]["name"], "Проверка")
+        updated = self.client.put(board + "/statuses/" + old_id,
+                                  json={"name": "Входящие", "position": 0, "color": "teal"})
+        self.assertEqual(updated.status_code, 200, updated.text)
+        statuses = updated.json()["statuses"]
+        self.assertEqual([s["position"] for s in statuses], list(range(len(statuses))))
+        self.assertEqual(statuses[0]["id"], old_id)
+        detail = self.client.get("/api/tasks/" + task["id"]).json()
+        self.assertEqual((detail["board_name"], detail["status"]["name"]), (name, "Входящие"))
+        self.assertIsNone(detail["completed_at"])
+
     def test_create_from_chat_retry_notification_and_completion_are_internal(self):
         before = self.staff_client.get("/api/conversations/counts").json()["open_tasks"]
         task, body = self.create(

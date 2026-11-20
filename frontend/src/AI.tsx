@@ -1,3 +1,4 @@
+import { memberOptions, type Member } from "./team";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -560,7 +561,7 @@ function ConfigForm({ initial }: { initial: ConfigResult }) {
   const team = useQuery({
     queryKey: ["team"],
     queryFn: () =>
-      api<{ id: string; name: string; role: string }[]>("/api/team"),
+      api<Member[]>("/api/team"),
   });
   const change = <K extends keyof Config>(key: K, value: Config[K]) =>
     set((x) => ({ ...x, [key]: value }));
@@ -630,9 +631,7 @@ function ConfigForm({ initial }: { initial: ConfigResult }) {
           label="Дежурный менеджер"
           clearable
           value={c.duty_user_id}
-          data={(team.data || [])
-            .filter((u) => u.role !== "staff")
-            .map((u) => ({ value: u.id, label: u.name }))}
+          data={memberOptions(team.data?.filter((u) => u.role !== "staff"))}
           onChange={(v) => change("duty_user_id", v)}
         />
       </div>

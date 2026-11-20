@@ -11,7 +11,14 @@
 .task-toolbar {
   margin-bottom: 20px;
 }
+.task-board-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
 .task-tabs {
+  flex-wrap: wrap;
   display: flex;
   gap: 6px;
 }

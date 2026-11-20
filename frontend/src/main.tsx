@@ -44,6 +44,7 @@ import "./inbox-i18n";
 import { TasksPage, TaskDialogs, NotificationBell } from "./Tasks";
 import { CustomersPage } from "./Customers";
 import { InboxReport } from "./InboxReport";
+import { invalidateTeamQueries } from "./team";
 import { TeamAdmin, AccessLink } from "./TeamAdmin";
 import { QuickReplySettings } from "./QuickReplies";
 import { IntegrationQueue } from "./IntegrationQueue";
@@ -59,7 +60,6 @@ import {
   ApiError,
   refreshSession,
   SessionExpiredError,
-  setCsrf,
   setSession,
   type User,
   type Setting,
@@ -119,7 +119,6 @@ function Auth({
       const path = !user ? "/api/auth/login" : "/api/auth/password";
       const body = !user ? { email, password } : { password };
       const next = await api<User>(path, "POST", body);
-      setCsrf(next.csrf_token);
       passwordSet("");
       onUser(next);
     } catch (e) {
@@ -682,29 +681,15 @@ function Workspace({
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          if (
-            payload.type === "team.changed" &&
-            payload.employee_id === user.id
-          )
-            void refreshSession().catch(() => {});
-          if (
-            [
-              "team.changed",
-              "quick_replies.changed",
-              "integrations.changed",
-            ].includes(payload.type)
-          ) {
-            for (const key of [
-              "admin-users",
-              "messages",
-              "tasks",
-              "task",
-              "team",
-              "quick-replies",
-              "integration-health",
-            ])
-              void query.invalidateQueries({ queryKey: [key] });
+          if (payload.type === "team.changed") {
+            if (payload.employee_id === user.id)
+              void refreshSession().catch(() => {});
+            void invalidateTeamQueries(query);
           }
+          if (payload.type === "quick_replies.changed")
+            void query.invalidateQueries({ queryKey: ["quick-replies"] });
+          if (payload.type === "integrations.changed")
+            void query.invalidateQueries({ queryKey: ["integration-health"] });
           if (
             payload.type === "messages.changed" ||
             payload.type === "tasks.changed" ||
@@ -1012,9 +997,7 @@ function Workspace({
                 user={user}
                 onSave={(updated) => {
                   onUser(updated);
-                  for (const key of ["team", "messages", "tasks", "task"]) {
-                    void query.invalidateQueries({ queryKey: [key] });
-                  }
+                  void invalidateTeamQueries(query);
                 }}
               />
               {user.role === "admin" && <SettingsPage />}
@@ -1022,7 +1005,7 @@ function Workspace({
           )}
         </div>
       </main>
-      <TaskDialogs />
+      <TaskDialogs user={user} />
       <NotificationEvents />
     </div>
   );

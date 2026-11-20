@@ -105,10 +105,10 @@ let expired = false;
 let revision = 0;
 let generation = 0;
 let refreshing: Promise<void> | null = null;
-export const setCsrf = (value: string) => {
-  csrf = value;
-};
 export function setSession(user: User | null) {
+  // Saving a profile keeps the same authenticated session and its pending requests.
+  if (user && !expired && sessionUser === user.id && csrf === user.csrf_token)
+    return;
   csrf = user?.csrf_token || "";
   sessionUser = user?.id || "";
   expired = false;
@@ -197,7 +197,8 @@ async function request(
   options: () => RequestInit,
 ): Promise<Response> {
   const protectedRequest =
-    path.startsWith("/api/") && !path.startsWith("/api/auth/");
+    path === "/api/auth/profile" ||
+    (path.startsWith("/api/") && !path.startsWith("/api/auth/"));
   if (protectedRequest && expired) throw new SessionExpiredError();
   const startedAt = revision;
   const startedGeneration = generation;
