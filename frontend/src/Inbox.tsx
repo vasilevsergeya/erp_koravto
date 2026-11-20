@@ -60,6 +60,7 @@ import { ConversationTasks, createTask, openTask } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
 import { QuickReplyPicker } from "./QuickReplies";
 import { DraftPanel } from "./AI";
+import { DialogSummary, useSummaryLanguage } from "./DialogSummary";
 import { loadDraft, saveDraft, removeDraft } from "./inbox-drafts";
 import { taskLabel } from "./task-i18n";
 import { OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
@@ -280,6 +281,7 @@ export function Inbox({ user }: { user: User }) {
     >
   >({});
   const canWrite = user.role === "admin" || user.role === "manager";
+  const summaryPreference = useSummaryLanguage(user.id, canWrite, ownLanguage);
   useEffect(() => {
     if (selected)
       saveDraft(user.id, selected, {
@@ -1058,6 +1060,13 @@ export function Inbox({ user }: { user: User }) {
                 <small>{c?.phone}</small>
               </div>
               {c && <Badge variant="light">{t(c.state)}</Badge>}
+              {canWrite && c && (
+                <DialogSummary
+                  key={`summary:${c.id}`}
+                  conversationId={c.id}
+                  preference={summaryPreference}
+                />
+              )}
               {c?.customer_id && (
                 <TranslationPreferences
                   key={c.id}

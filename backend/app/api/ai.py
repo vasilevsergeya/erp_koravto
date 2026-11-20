@@ -14,6 +14,7 @@ from app.api.inbox import (
     describe_message,
     enqueue,
     locked_conversation,
+    message_activity,
     translate_before_send,
     writer,
 )
@@ -29,6 +30,7 @@ from app.models import (
     Conversation,
     Customer,
     Message,
+    MessageHidden,
     User,
     now,
 )
@@ -41,7 +43,8 @@ from app.services.ai import (
     supersede,
 )
 from app.services.ai_config import BASE_PROMPT, AIConfig, config_version, settings
-from app.services.dialog_languages import client_language, manager_language
+from app.services.dialog_languages import Language, client_language, manager_language
+from app.services.dialog_summary import message_batches, summarize
 from app.services.outbox import emit
 
 router = APIRouter(prefix="/api", tags=["ai"])
@@ -223,6 +226,73 @@ def activate(prompt_id: str, user=Depends(admin_user), db: Session = Depends(get
     db.add(AuditEvent(user_id=user.id, action="ai.prompt.activated", target=row.id))
     db.commit()
     return prompts(user, db)
+
+
+class SummaryInput(BaseModel):
+    language: Language
+
+
+@router.get("/me/summary-language")
+def summary_language(user=Depends(writer)):
+    return {"language": user.summary_language}
+
+
+@router.put("/me/summary-language")
+def save_summary_language(
+    body: SummaryInput, user=Depends(writer), db: Session = Depends(get_db)
+):
+    user.summary_language = body.language
+    db.commit()
+    return {"language": body.language}
+
+
+@router.post("/conversations/{conversation_id}/summary")
+def conversation_summary(
+    conversation_id: str, body: SummaryInput, user=Depends(writer), db: Session = Depends(get_db)
+):
+    rate_limit("ai-summary:" + user.id, 10, 60)
+    conversation = db.get(Conversation, conversation_id)
+    if not conversation:
+        raise HTTPException(404, "Диалог не найден")
+    cfg = settings(db)
+    if not cfg.enabled or conversation.ai_mode == "off":
+        raise HTTPException(409, "AI выключен")
+    key = get_setting(db, "openai.api_key", "")
+    if not key:
+        raise HTTPException(409, "Ключ OpenAI не настроен")
+
+    activity = message_activity()
+    rows = db.execute(
+        select(
+            activity.label("at"),
+            Message.direction,
+            Message.kind,
+            Message.status,
+            func.coalesce(Message.delivery_body, Message.body).label("text"),
+        )
+        .where(
+            Message.conversation_id == conversation_id,
+            ~Message.deleted,
+            ~Message.is_private_note,
+            Message.author_type != "system",
+            ~select(MessageHidden.message_id)
+            .where(MessageHidden.message_id == Message.id, MessageHidden.user_id == user.id)
+            .exists(),
+        )
+        .order_by(activity, Message.id)
+    )
+    batches = list(message_batches(rows))
+    db.rollback()  # Release the database connection while waiting for the provider.
+    if not batches:
+        raise HTTPException(400, "В диалоге пока нет сообщений для сводки")
+    adapter = OpenAIAdapter(
+        key,
+        lambda model, purpose, usage, error: record_usage(None, cfg, model, "summary", usage, error),
+    )
+    try:
+        return asyncio.run(summarize(adapter, cfg.model, body.language, batches))
+    except AIError:
+        raise HTTPException(502, "AI не смог подготовить сводку. Попробуйте ещё раз.") from None
 
 
 @router.get("/conversations/{conversation_id}/draft")

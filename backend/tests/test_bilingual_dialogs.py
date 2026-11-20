@@ -207,6 +207,17 @@ class BilingualAcceptance(unittest.TestCase):
                 ("طلبك جاهز", "Ваш заказ готов", "ar", "ru"),
             )
 
+    def test_summary_language_is_personal_and_survives_a_new_session(self):
+        path = "/api/me/summary-language"
+        self.assertIsNone(self.client.get(path).json()["language"])
+        for client, language in [(self.client, "de"), (self.other_client, "ko"), (self.client, "fr")]:
+            saved = client.put(path, json={"language": language})
+            self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(self.client.put(path, json={"language": "invalid"}).status_code, 422)
+        self.assertEqual(self.session(self.user).get(path).json()["language"], "fr")
+        self.assertEqual(self.other_client.get(path).json()["language"], "ko")
+        self.assertEqual(self.client.get("/api/me/language").json()["language"], "ru")
+
     def test_edited_ai_translates_final_manager_text_once_and_preserves_both(self):
         with patch(
             "app.services.translations.translate_text", AsyncMock(return_value="Pedido enviado")
