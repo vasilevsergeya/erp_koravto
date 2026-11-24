@@ -29,6 +29,11 @@ const { chromium } = require("playwright"),
   });
   const dialogs = Array.from({ length: 142 }, (_, i) => ({
     id: "dialog-" + i,
+    client_number: "C-00123",
+    phone_country: "US",
+    customer_type: "partner",
+    order_count: 2,
+    note_preview: "Доставка",
     name: "Клиент " + (i + 1),
     display_name: "Клиент " + (i + 1),
     phone: "+1202555" + String(i).padStart(4, "0"),
@@ -44,6 +49,12 @@ const { chromium } = require("playwright"),
     has_ai_draft: i % 3 === 0,
     needs_human: i % 9 === 0,
   }));
+  let profileNote = {
+    text: "Доставка",
+    version: 1,
+    author: "Тест",
+    updated_at: null,
+  };
   const profile = {
     id: "customer-1",
     name: "Демонстрационный клиент",
@@ -83,19 +94,27 @@ const { chromium } = require("playwright"),
       created_at: new Date().toISOString(),
     },
   ];
+  const summaryRequests = [];
+  const summaryLanguages = new Map();
+  let managerId = "user-test";
   await page.route("**/api/**", async (r) => {
     const u = new URL(r.request().url()),
       p = u.pathname;
     let d = [];
     if (p === "/api/auth/me" || p === "/api/auth/refresh")
       d = {
-        id: "user-test",
+        id: managerId,
         email: "demo@example.test",
         role: "admin",
         csrf_token: "test",
         must_change_password: false,
       };
-    else if (p === "/api/conversations/counts")
+    else if (p === "/api/me/language") d = { language: "en" };
+    else if (p === "/api/me/summary-language") {
+      if (r.request().method() === "PUT")
+        summaryLanguages.set(managerId, r.request().postDataJSON().language);
+      d = { language: summaryLanguages.get(managerId) || null };
+    } else if (p === "/api/conversations/counts")
       d = {
         all: 142,
         waiting_us: 142,
@@ -112,8 +131,38 @@ const { chromium } = require("playwright"),
     else if (/\/conversations\/[^/]+$/.test(p))
       d = dialogs.find((x) => p.endsWith(x.id)) || dialogs[0];
     else if (p.endsWith("/messages")) d = msgs;
-    else if (p.endsWith("/customer"))
+    else if (p.endsWith("/summary")) {
+      summaryRequests.push([
+        p,
+        r.request().method(),
+        r.request().postDataJSON(),
+      ]);
+      d = {
+        summary: "Клиент уточняет срок доставки.",
+        task: "Проверить дату отправки.",
+      };
+    } else if (p.endsWith("/customer"))
       d = { status: "not_found", clients: [], stale: false, error: null };
+    else if (p.endsWith("/profile-note")) {
+      if (r.request().method() === "PUT") {
+        const payload = r.request().postDataJSON();
+        if (payload.version !== profileNote.version)
+          return r.fulfill({
+            status: 409,
+            json: { detail: "Конфликт версий" },
+          });
+        profileNote = {
+          ...profileNote,
+          text: payload.text,
+          version: profileNote.version + 1,
+        };
+      }
+      d = profileNote;
+    } else if (
+      p.endsWith("/profile-note/history") ||
+      p.endsWith("/counterparties")
+    )
+      d = [];
     else if (p.startsWith("/api/customers/")) d = profile;
     else if (p.endsWith("/draft"))
       d = { item: null, configured: true, enabled: true };
@@ -144,10 +193,59 @@ const { chromium } = require("playwright"),
       };
     await r.fulfill({ json: d });
   });
-  await page.route("**/health", (r) => r.fulfill({ json: { ok: true } }));
+  await page.route(
+    (url) => url.pathname === "/health",
+    (r) => r.fulfill({ json: { ok: true } }),
+  );
   await page.goto(process.env.CRM_TEST_BASE_URL || "http://127.0.0.1:5173/");
   await page.locator('[data-dialog-id="dialog-0"]').click();
   await page.locator(".crm-message").first().waitFor();
+  await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
+  const summary = page.getByRole("dialog", { name: "AI-сводка диалога" });
+  const summaryLanguage = summary.getByLabel("Язык сводки");
+  assert.equal(await summaryLanguage.inputValue(), "English");
+  await summaryLanguage.click();
+  await page.getByRole("option", { name: "Русский" }).click();
+  await summary.getByRole("button", { name: "Сформировать" }).click();
+  await summary.getByText("Проверить дату отправки.").waitFor();
+  assert.deepEqual(summaryRequests, [
+    ["/api/conversations/dialog-0/summary", "POST", { language: "ru" }],
+  ]);
+  assert.deepEqual(await summary.locator('[lang="ru"] p').allTextContents(), [
+    "Клиент уточняет срок доставки.",
+    "Задача",
+    "Проверить дату отправки.",
+  ]);
+  await page.keyboard.press("Escape");
+  await page.locator('[data-dialog-id="dialog-1"]').click();
+  await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
+  await summary.getByRole("button", { name: "Сформировать" }).waitFor();
+  assert.equal(await summaryLanguage.inputValue(), "Русский");
+  assert.equal(await summary.getByText("Проверить дату отправки.").count(), 0);
+  await summaryLanguage.click();
+  await page.getByRole("option", { name: "Deutsch" }).click();
+  await page.keyboard.press("Escape");
+  await page.locator('[data-dialog-id="dialog-0"]').click();
+  await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
+  assert.equal(await summaryLanguage.inputValue(), "Deutsch");
+  assert.equal(summaryRequests.length, 1);
+  await page.keyboard.press("Escape");
+
+  for (const [id, expected] of [
+    ["another-manager", "English"],
+    ["user-test", "Deutsch"],
+  ]) {
+    managerId = id;
+    await page.reload();
+    await page.locator('[data-dialog-id="dialog-1"]').click();
+    await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
+    await page.waitForFunction(
+      (value) =>
+        document.querySelector('[role="dialog"] input')?.value === value,
+      expected,
+    );
+    await page.keyboard.press("Escape");
+  }
   // Switching both fresh and cached dialogs must unmount the previous assistant.
   for (const id of [
     "dialog-0",
@@ -276,6 +374,62 @@ const { chromium } = require("playwright"),
   );
   assert.deepEqual(errors, []);
   console.log(JSON.stringify(metrics));
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const width = (selector) =>
+    page
+      .locator(selector)
+      .evaluate((el) => Math.round(el.getBoundingClientRect().width));
+  for (const [column, handle, delta, expected, base] of [
+    [".crm-dialogs", ".crm-resize-list", 65, 345, 280],
+    [".crm-customer", ".crm-resize-panel", -43, 293, 250],
+  ]) {
+    const rect = await page.locator(handle).boundingBox();
+    await page.mouse.move(rect.x + 3, rect.y + 55);
+    await page.mouse.down();
+    await page.mouse.move(rect.x + 3 + delta, rect.y + 55, { steps: 4 });
+    await page.mouse.up();
+    assert.equal(await width(column), expected);
+    await page.reload();
+    await page.locator("[data-dialog-id]").first().click();
+    assert.equal(await width(column), expected);
+    await page.locator(handle).dblclick();
+    assert.equal(await width(column), base);
+  }
+  await page.getByTitle("Фильтр", { exact: true }).click();
+  await page.getByRole("menuitem", { name: /Сначала старые/ }).click();
+  await page.reload();
+  await page.getByTitle("Сначала старые", { exact: true }).waitFor();
+  await page.locator("[data-dialog-id]").first().click();
+  const edit = page.locator(".crm-profile-note textarea:visible");
+  await page
+    .getByRole("button", { name: "Заметка о клиенте", exact: true })
+    .click();
+  await edit.fill("Мой текст");
+  profileNote = { ...profileNote, text: "Версия коллеги", version: 2 };
+  await edit.press("Control+Enter");
+  await page.getByText("Версия коллеги", { exact: true }).waitFor();
+  assert.equal(await edit.inputValue(), "Мой текст");
+  await page
+    .getByRole("button", { name: "Принять сохранённую версию" })
+    .click();
+  assert.equal(profileNote.text, "Версия коллеги");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByRole("button", { name: "Открыть карточку", exact: true })
+    .click();
+  await edit.fill("Проверка");
+  await edit.press("Control+Enter");
+  await page.waitForFunction(
+    () => !document.querySelector(".crm-client-drawer textarea")?.disabled,
+  );
+  assert.equal(profileNote.text, "Проверка");
+  await page.goBack();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  assert.equal(
+    await page.locator(".crm-thread-header").evaluate((el) => el.offsetHeight),
+    44,
+  );
+  assert.deepEqual(errors, []);
   await browser.close();
 })().catch((e) => {
   console.error(e);

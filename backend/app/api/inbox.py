@@ -25,7 +25,9 @@ from app.models import (
     AuditEvent,
     Conversation,
     Customer,
+    CustomerAvatar,
     CustomerIdentity,
+    CustomerNumber,
     Message,
     MessageAction,
     MessageHidden,
@@ -34,7 +36,14 @@ from app.models import (
     now,
 )
 from app.services.ai import supersede
-from app.services.customers import attach_conversation, structure_lock
+from app.services.customer_orders import recalculate
+from app.services.customers import (
+    attach_conversation,
+    latest_profile_note,
+    numbered_customer,
+    parse_customer_number,
+    structure_lock,
+)
 from app.services.dialog_languages import (
     client_language,
     incoming_enabled,
@@ -97,10 +106,28 @@ def last_activity():
     )
 
 
-def describe_conversation(c, db, user_id=None):
-    onec = customer_snapshot(c, db)
+def customer_cards(db, customer_ids):
+    number = (
+        select(func.min(CustomerNumber.number))
+        .where(CustomerNumber.customer_id == Customer.id)
+        .correlate(Customer)
+        .scalar_subquery()
+    )
+    rows = db.execute(
+        select(Customer, number, CustomerAvatar.updated_at)
+        .outerjoin(CustomerAvatar, CustomerAvatar.customer_id == Customer.id)
+        .where(Customer.id.in_(customer_ids))
+    )
+    return {p.id: (p, f"C-{n:05d}" if n else None, photo_at) for p, n, photo_at in rows}
+
+
+def describe_conversation(c, db, user_id=None, *, cards=None, onec_settings=None):
+    onec_settings = onec_settings or connection_settings(db)
+    onec = customer_snapshot(c, db, settings=onec_settings)
     customer_name = onec["clients"][0]["name"] if len(onec["clients"]) == 1 else ""
-    profile = db.get(Customer, c.customer_id) if c.customer_id else None
+    if cards is None:
+        cards = customer_cards(db, [c.customer_id]) if c.customer_id else {}
+    profile, client_number, photo_at = cards.get(c.customer_id, (None, None, None))
     if profile and profile.name_manual:
         customer_name = profile.name
     last = db.scalar(
@@ -117,10 +144,22 @@ def describe_conversation(c, db, user_id=None):
         .limit(1)
     )
     return {
+        "avatar_url": f"/api/customers/{c.customer_id}/avatar?v={int(photo_at.timestamp())}"
+        if photo_at
+        else None,
+        "phone_country": onec["phone_country"],
         "id": c.id,
         "name": c.name,
         "display_name": customer_name or (profile.name if profile else "") or c.name or c.phone,
         "customer_id": c.customer_id,
+        "order_count": profile.order_count
+        if profile
+        and profile.order_count is not None
+        and profile.order_config == onec_settings[1]
+        and onec["status"] != "not_configured"
+        else None,
+        "customer_type": profile.customer_type if profile else "retail",
+        "client_number": client_number,
         "onec_status": onec["status"],
         "onec_stale": onec["stale"],
         "phone": c.phone,
@@ -183,13 +222,25 @@ def describe_message(m, db, user_id=None):
         quoted and (quoted.deleted or (user_id and db.get(MessageHidden, (user_id, quoted.id))))
     )
     author = db.get(User, m.author_id) if m.author_id else None
+    history = [entry for entry in (m.history or []) if isinstance(entry, dict)]
+    archive_author = next(
+        (
+            entry["source_author_name"].strip()[:200]
+            for entry in reversed(history)
+            if entry.get("source") == "wazzup_archive"
+            and isinstance(entry.get("source_author_name"), str)
+            and entry["source_author_name"].strip()
+        ),
+        None,
+    )
+
     attachment = db.get(Attachment, m.attachment_id) if m.attachment_id else None
     task = db.get(Task, m.task_id) if m.task_id else None
     return {
         "id": m.id,
         "direction": m.direction,
         "author_type": m.author_type,
-        "author_name": author.name if author else None,
+        "author_name": author.name if author else archive_author,
         "text": "" if m.deleted else m.body,
         "version": m.version,
         "author_id": m.author_id,
@@ -219,9 +270,11 @@ def describe_message(m, db, user_id=None):
         "source_language": m.delivery_source_language,
         "delivery_text": m.delivery_body if not m.deleted else None,
         "kind": m.kind,
-        "status": m.status,
+        "status": "" if m.status == "archived" else m.status,
         "edited": m.edited,
-        "history": [] if m.deleted else m.history,
+        "history": []
+        if m.deleted
+        else [entry for entry in history if isinstance(entry.get("body"), str)],
         "content": rich_content(m.kind, "" if m.deleted else m.body),
         "deleted": m.deleted,
         "created_at": (m.sent_at or m.created_at) if m.direction == "out" else m.created_at,
@@ -238,6 +291,29 @@ def describe_message(m, db, user_id=None):
     }
 
 
+def client_filter(query, group, db):
+    if group == "partners":
+        return query.where(
+            Conversation.customer_id.in_(
+                select(Customer.id).where(Customer.customer_type == "partner")
+            )
+        )
+    if group == "regular":
+        values, fingerprint = connection_settings(db)
+        return (
+            query.where(
+                Conversation.customer_id.in_(
+                    select(Customer.id).where(
+                        Customer.order_count >= 2, Customer.order_config == fingerprint
+                    )
+                )
+            )
+            if all(values)
+            else query.where(False)
+        )
+    return query
+
+
 @router.get("/conversations")
 def conversations(
     user=Depends(current_user),
@@ -249,8 +325,10 @@ def conversations(
     channel: str = "",
     needs_human: bool = False,
     ai_draft: bool = False,
+    group: Literal["all", "regular", "partners"] = "all",
+    sort: Literal["newest", "oldest"] = "newest",
 ):
-    query = select(Conversation)
+    query = client_filter(select(Conversation), group, db)
     if ai_draft:
         query = query.where(pending_draft())
     if state:
@@ -261,7 +339,10 @@ def conversations(
         query = query.where(Conversation.channel_id == channel)
     if needs_human:
         query = query.where(Conversation.needs_human.is_(True))
-    if q.strip():
+    number = parse_customer_number(q)
+    if number is not None:
+        query = select(Conversation).where(Conversation.customer_id.in_(numbered_customer(number)))
+    elif q.strip():
         q = q.strip()
         fulltext = select(Message.conversation_id).where(
             func.to_tsvector(text("'simple'"), Message.body).op("@@")(
@@ -297,19 +378,41 @@ def conversations(
                 )
             )
         query = query.where(or_(*conditions))
-    rows = db.scalars(
-        query.order_by(
-            func.coalesce(last_activity(), Conversation.created_at).desc(),
-            Conversation.id,
+    activity = func.coalesce(last_activity(), Conversation.created_at)
+    if state == "waiting_us":
+        first_unanswered = (
+            select(func.min(Message.created_at))
+            .where(
+                Message.conversation_id == Conversation.id,
+                Message.direction == "in",
+                Message.inbound_seq > Conversation.answered_seq,
+                Message.deleted.is_(False),
+                Message.is_private_note.is_(False),
+                Message.author_type != "system",
+            )
+            .correlate(Conversation)
+            .scalar_subquery()
         )
+        activity = func.coalesce(first_unanswered, activity)
+    rows = db.scalars(
+        query.order_by(activity.asc() if sort == "oldest" else activity.desc(), Conversation.id)
         .offset(offset)
         .limit(50)
     )
-    return [describe_conversation(c, db, user.id) for c in rows]
+    dialogs = rows.all()
+    cards = customer_cards(db, {c.customer_id for c in dialogs if c.customer_id})
+    settings = connection_settings(db)
+    return [
+        describe_conversation(c, db, user.id, cards=cards, onec_settings=settings) for c in dialogs
+    ]
 
 
 @router.get("/conversations/counts")
-def counts(user=Depends(current_user), db: Session = Depends(get_db)):
+def counts(
+    user=Depends(current_user),
+    db: Session = Depends(get_db),
+    group: Literal["all", "regular", "partners"] = "all",
+):
     query = select(
         func.count().label("all"),
         func.count().filter(Conversation.unread_count > 0).label("unanswered"),
@@ -324,7 +427,7 @@ def counts(user=Depends(current_user), db: Session = Depends(get_db)):
         .scalar_subquery()
         .label("open_tasks"),
     ).select_from(Conversation)
-    return dict(db.execute(query).mappings().one())
+    return dict(db.execute(client_filter(query, group, db)).mappings().one())
 
 
 @router.get("/conversations/{conversation_id}")
@@ -334,7 +437,10 @@ def conversation_detail(
     row = db.get(Conversation, conversation_id)
     if not row:
         raise HTTPException(404, "Диалог не найден")
-    return describe_conversation(row, db, user.id)
+    result = describe_conversation(row, db, user.id)
+    note = latest_profile_note(db, row.customer_id) if row.customer_id else None
+    result["note_preview"] = note.body[:200] if note else ""
+    return result
 
 
 @router.get("/conversations/{conversation_id}/customer")
@@ -689,6 +795,8 @@ def change_conversation(
     for key, value in values.items():
         setattr(c, key, value)
     db.add(AuditEvent(user_id=user.id, action="conversation.updated", target=c.id))
+    if body.order_numbers is not None:
+        recalculate(db, c.customer_id)
     db.commit()
     emit(conversations=[c.id])
     return describe_conversation(c, db, user.id)
@@ -726,7 +834,10 @@ def response_state(
     latest = db.scalar(
         select(Message.inbound_seq)
         .where(
-            Message.conversation_id == c.id, Message.direction == "in", Message.deleted.is_(False)
+            Message.conversation_id == c.id,
+            Message.direction == "in",
+            Message.inbound_seq.is_not(None),
+            Message.deleted.is_(False),
         )
         .order_by(Message.inbound_seq.desc())
         .limit(1)

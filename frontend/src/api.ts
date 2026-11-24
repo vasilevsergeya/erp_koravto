@@ -24,6 +24,12 @@ export type TranslationPreferences = {
   translation_manager_language: string;
 };
 export type Conversation = {
+  client_number?: string | null;
+  customer_type?: "retail" | "partner";
+  order_count?: number | null;
+  avatar_url?: string | null;
+  phone_country?: string;
+  note_preview?: string;
   inbound_seq: number;
   translation?: TranslationPreferences | null;
   id: string;

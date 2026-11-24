@@ -231,6 +231,116 @@ class OneCAcceptance(unittest.TestCase):
             c.onec_next_at = now() - timedelta(minutes=1)
             db.commit()
 
+    def test_order_status_follows_verified_sources_and_manual_links(self):
+        from app.services.customers import attach_conversation, structure_lock
+
+        with SessionLocal() as db:
+            structure_lock(db)
+            c = db.get(Conversation, self.cid)
+            c.phone = "+12025550871"
+            owner = attach_conversation(db, c)
+            db.commit()
+            customer_id = owner.id
+        path = "/api/conversations/" + self.cid
+
+        def count():
+            return self.client.get(path).json()["order_count"]
+
+        def sync():
+            with SessionLocal() as db:
+                db.get(Conversation, self.cid).onec_attempted_at = None
+                db.commit()
+            self.assertEqual(self.client.post(path + "/customer/refresh").status_code, 200)
+
+        account = {
+            "name": "Customer",
+            "matched_phone": "+12025550871",
+            "counterparty_id": "A",
+            "realizations": ["X"],
+            "orders": [{"number": "X", "cancelled": False, "fully_returned": False}],
+        }
+        self.mock.return_value = [account]
+        sync()
+        self.assertEqual(count(), 2)  # One 1C order and MANUAL-1.
+        self.assertIn(
+            self.cid, {r["id"] for r in self.client.get("/api/conversations?group=regular").json()}
+        )
+        account["orders"][0]["fully_returned"] = True
+        sync()
+        self.assertEqual(count(), 1)
+        self.client.patch(path, json={"order_numbers": []})
+        self.assertEqual(count(), 0)
+        links = "/api/customers/" + customer_id + "/counterparties"
+        other = {
+            "name": "Second",
+            "matched_phone": "+12025550999",
+            "counterparty_id": "B",
+            "realizations": ["Y"],
+            "orders": [{"number": "Y", "cancelled": False, "fully_returned": False}],
+        }
+        self.mock.return_value = [other]
+        self.assertEqual(
+            self.client.get(links + "/search", params={"phone": other["matched_phone"]}).json()[0][
+                "id"
+            ],
+            "B",
+        )
+        selection = {"phone": other["matched_phone"], "account_id": "B", "linked": True}
+        self.assertEqual(self.client.put(links, json=selection).status_code, 200)
+        self.assertEqual(count(), 1)
+        self.assertEqual(
+            self.client.put(links, json={**selection, "linked": False}).status_code, 200
+        )
+        self.assertEqual(count(), 0)
+        self.mock.return_value = [{**account, "matched_phone": other["matched_phone"]}]
+        sync()
+        self.assertIsNone(count())
+
+    def test_confirmed_email_match_and_removal(self):
+        from app.services.customers import attach_conversation, structure_lock
+
+        with SessionLocal() as db:
+            structure_lock(db)
+            owner = attach_conversation(db, db.get(Conversation, self.cid))
+            db.commit()
+            key, version = owner.id, owner.version
+        profile = "/api/customers/" + key
+        self.assertEqual(
+            self.client.post(
+                profile + "/emails", json={"email": "Shop@Example.test", "version": version}
+            ).status_code,
+            200,
+        )
+        self.mock.return_value = []
+        account = {
+            "name": "Customer",
+            "matched_email": "shop@example.test",
+            "counterparty_id": "EMA",
+            "realizations": [],
+        }
+        with patch(
+            "app.integrations.onec.OneCAdapter.customers_by_email",
+            new_callable=AsyncMock,
+            return_value=[account],
+        ) as lookup:
+            self.assertEqual(
+                self.client.post("/api/conversations/" + self.cid + "/customer/refresh").json()[
+                    "status"
+                ],
+                "matched",
+            )
+            lookup.assert_awaited_once_with("shop@example.test")
+        self.assertEqual(self.client.get("/api/conversations/" + self.cid).json()["order_count"], 1)
+        version = self.client.get(profile).json()["version"]
+        self.assertEqual(
+            self.client.post(
+                profile + "/emails",
+                json={"email": "shop@example.test", "version": version, "remove": True},
+            ).status_code,
+            200,
+        )
+        self.assertIsNone(self.client.get("/api/conversations/" + self.cid).json()["order_count"])
+
     def test_lookup_updates_display_search_and_preserves_chat_data(self):
         path = "/api/conversations/" + self.cid
         result = self.client.get(path + "/customer")

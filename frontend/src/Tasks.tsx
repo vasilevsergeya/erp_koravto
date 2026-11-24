@@ -1,3 +1,5 @@
+import { linkCustomerNumbers } from "./customer-markdown";
+import { NumberLinks } from "./CustomerNumber";
 import { memberOptions, type Member } from "./team";
 import { openConversation } from "./customer-api";
 import Markdown from "react-markdown";
@@ -651,7 +653,9 @@ export function TaskDialogs({ user }: { user: User }) {
                   {t("edit")}
                 </Button>
               </div>
-              <h2>{task.title}</h2>
+              <h2>
+                <NumberLinks text={task.title} />
+              </h2>
               {task.customer_id && (
                 <Button
                   variant="light"
@@ -664,7 +668,9 @@ export function TaskDialogs({ user }: { user: User }) {
                 </Button>
               )}
               <div className="task-description" dir="auto">
-                <Markdown skipHtml>{task.description || "—"}</Markdown>
+                <Markdown skipHtml remarkPlugins={[linkCustomerNumbers]}>
+                  {task.description || "—"}
+                </Markdown>
               </div>
               <dl className="task-facts">
                 {[

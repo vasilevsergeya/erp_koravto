@@ -28,6 +28,8 @@ from app.models import (
     now,
 )
 from app.services.ai import queue_inbound, supersede
+from app.services.customer_avatars import refresh_avatars_loop, remember_avatar
+from app.services.customer_orders import refresh_links_loop
 from app.services.customers import attach_conversation, structure_lock
 from app.services.message_actions import process_action, recover_actions
 from app.services.onec_customers import refresh_customers_loop
@@ -161,6 +163,7 @@ async def process_webhook(ctx, event_id: str):
                     db.add(conversation)
                     db.flush()
                 attach_conversation(db, conversation)
+                remember_avatar(db, conversation.customer_id, item)
                 inbound = item.get("status") == "inbound" and not item.get("isEcho")
                 timestamp = message_time(item.get("dateTime"))
                 message = Message(
@@ -379,6 +382,8 @@ async def startup(ctx):
     ctx["monitor_task"] = asyncio.create_task(monitor_loop())
     configure_logging("worker")
     ctx["recovery_task"] = asyncio.create_task(recover_pending(ctx))
+    ctx["link_task"] = asyncio.create_task(refresh_links_loop())
+    ctx["avatar_task"] = asyncio.create_task(refresh_avatars_loop())
     ctx["onec_task"] = asyncio.create_task(refresh_customers_loop())
 
 
@@ -386,6 +391,12 @@ async def shutdown(ctx):
     ctx["monitor_task"].cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await ctx["monitor_task"]
+    ctx["link_task"].cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await ctx["link_task"]
+    ctx["avatar_task"].cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await ctx["avatar_task"]
     ctx["onec_task"].cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await ctx["onec_task"]

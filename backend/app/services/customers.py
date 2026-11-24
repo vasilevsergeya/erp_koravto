@@ -6,13 +6,21 @@ Names and unverified telephone strings never resolve a person across channels.
 
 import hashlib
 import json
+import re
 
 import phonenumbers
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from app.core.settings import redis_client
-from app.models import Customer, CustomerEvent, CustomerIdentity, now
+from app.models import (
+    Customer,
+    CustomerEvent,
+    CustomerIdentity,
+    CustomerNumber,
+    CustomerProfileNote,
+    now,
+)
 
 
 def structure_lock(db, *, wait=True):
@@ -129,3 +137,33 @@ def publish_customers():
         redis_client.publish("crm:events", json.dumps({"type": "customers.changed"}))
     except Exception:
         pass  # Polling recovers committed changes if Redis is unavailable.
+
+
+def parse_customer_number(value):
+    match = re.fullmatch(r"[cс]-?([0-9]+)", value.strip(), re.IGNORECASE)
+    if not match:
+        return None
+    number = int(match[1])
+    return number if number <= 9223372036854775807 else 0
+
+
+def numbered_customer(number):
+    return select(CustomerNumber.customer_id).where(CustomerNumber.number == number)
+
+
+def display_number(db, customer_id):
+    if not customer_id:
+        return None
+    number = db.scalar(
+        select(func.min(CustomerNumber.number)).where(CustomerNumber.customer_id == customer_id)
+    )
+    return f"C-{number:05d}" if number else None
+
+
+def latest_profile_note(db, customer_id):
+    return db.scalar(
+        select(CustomerProfileNote)
+        .where(CustomerProfileNote.customer_id == customer_id)
+        .order_by(CustomerProfileNote.id.desc())
+        .limit(1)
+    )

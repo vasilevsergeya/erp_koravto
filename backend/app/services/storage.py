@@ -89,7 +89,7 @@ class PublicResolver(AbstractResolver):
         pass
 
 
-async def download_attachment(url: str) -> bytes:
+async def download_attachment(url: str, *, max_bytes: int = MAX_FILE_SIZE) -> bytes:
     # The validated resolver pins the connection to public addresses (no DNS rebinding).
     connector = aiohttp.TCPConnector(resolver=PublicResolver(), use_dns_cache=False)
     async with aiohttp.ClientSession(
@@ -117,12 +117,12 @@ async def download_attachment(url: str) -> bytes:
                     continue
                 if response.status != 200:
                     raise ValueError("attachment_download_failed")
-                if response.content_length and response.content_length > MAX_FILE_SIZE:
+                if response.content_length and response.content_length > max_bytes:
                     raise ValueError("attachment_too_large")
                 content = bytearray()
                 async for chunk in response.content.iter_chunked(65536):
                     content.extend(chunk)
-                    if len(content) > MAX_FILE_SIZE:
+                    if len(content) > max_bytes:
                         raise ValueError("attachment_too_large")
                 return bytes(content)
         raise ValueError("attachment_redirect_limit")

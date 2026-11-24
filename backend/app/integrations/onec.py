@@ -74,6 +74,12 @@ class OneCAdapter:
         digits = phone_digits(phone)
         if not digits:
             raise OneCError("invalid_phone")
+        return await self._lookup({"phone": digits, "match": "exact"})
+
+    async def customers_by_email(self, email: str) -> list[dict]:
+        return await self._lookup({"email": email, "match": "exact"})
+
+    async def _lookup(self, params: dict[str, str]) -> list[dict]:
         url = customer_endpoint(self.base_url)
         try:
             # No redirects/proxy environment: credentials stay on the configured private endpoint.
@@ -86,9 +92,7 @@ class OneCAdapter:
                     auth=httpx.BasicAuth(self.username, self.password),
                 ) as client,
             ):
-                async with client.stream(
-                    "GET", url, params={"phone": digits, "match": "exact"}
-                ) as response:
+                async with client.stream("GET", url, params=params) as response:
                     if response.status_code != 200:
                         code = {
                             401: "authentication",
@@ -119,6 +123,13 @@ class OneCAdapter:
                     raise ValueError
                 # Keep same-name clients and duplicate order numbers separate, as 1C does.
                 customer = {"name": item["name"], "realizations": item["realizations"]}
+                for key in ("counterparty_id", "matched_email"):
+                    if key in item:
+                        if not isinstance(item[key], str) or len(item[key]) > (
+                            128 if key == "counterparty_id" else 254
+                        ):
+                            raise ValueError
+                        customer[key] = item[key].strip()
                 if "matched_phone" in item:
                     if not isinstance(item["matched_phone"], str):
                         raise ValueError
@@ -153,6 +164,15 @@ class OneCAdapter:
                                 for key in ("number", "amount", "shipping_number", "project")
                             }
                         )
+                        for key in ("cancelled", "fully_returned"):
+                            if key in order:
+                                if type(order[key]) is not bool:
+                                    raise ValueError
+                                details[-1][key] = order[key]
+                        if "order_id" in order:
+                            if not isinstance(order["order_id"], str):
+                                raise ValueError
+                            details[-1]["order_id"] = order["order_id"]
                     customer["orders"] = details
                 clients.append(customer)
             return clients

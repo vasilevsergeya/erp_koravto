@@ -1,3 +1,5 @@
+import { ProfileNote } from "./ProfileNote";
+import { CustomerNumber, NumberLinks } from "./CustomerNumber";
 import { memberOptions, type Member } from "./team";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -32,6 +34,7 @@ import { OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
 
 type CustomerDetail = CustomerLite & {
   redirected_from?: string | null;
+  emails?: string[];
   conversations: {
     id: string;
     name: string;
@@ -122,8 +125,7 @@ function ProfileForm({
   const revision = useRef(customer?.version);
   const team = useQuery({
     queryKey: ["team"],
-    queryFn: () =>
-      api<Member[]>("/api/team"),
+    queryFn: () => api<Member[]>("/api/team"),
   });
   async function save() {
     setBusy(true);
@@ -255,6 +257,7 @@ function CustomerView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [phoneCountry, setPhoneCountry] = useState("RU");
   const [target, setTarget] = useState<string | null>(null);
   const [detach, setDetach] = useState<{ id: string; value: string } | null>(
@@ -288,6 +291,7 @@ function CustomerView({
       refresh(query);
       setAction("");
       setDetach(null);
+      if (path === "/emails") setEmail("");
       if (path === "/notes") {
         setNote("");
         noteId.current = crypto.randomUUID();
@@ -347,6 +351,7 @@ function CustomerView({
       {c.redirected_from && <Alert>{t("mergedNotice")}</Alert>}
       <div className="customer-heading">
         <h2 dir="auto">{c.display_name}</h2>
+        <CustomerNumber value={c.client_number} />
         {c.segment && <Badge>{t(c.segment)}</Badge>}
         {c.tags.map((tag) => (
           <Badge key={tag} variant="light">
@@ -358,6 +363,7 @@ function CustomerView({
         <div>
           <section className="surface customer-section">
             <h3>{t("profile")}</h3>
+            <ProfileNote key={c.id} id={c.id} admin={user.role === "admin"} />
             <dl>
               <dt>{t("language")}</dt>
               <dd>{c.language || t("unassigned")}</dd>
@@ -368,6 +374,50 @@ function CustomerView({
               <dt>{t("lastContact")}</dt>
               <dd>{time(c.last_contact)}</dd>
             </dl>
+            <h4>Email для сопоставления с 1С</h4>
+            {c.emails?.map((address) => (
+              <p key={address}>
+                {address}{" "}
+                {write && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void mutate("/emails", {
+                        version: c.version,
+                        email: address,
+                        remove: true,
+                      })
+                    }
+                  >
+                    Убрать
+                  </button>
+                )}
+              </p>
+            ))}
+            {write && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void mutate("/emails", { version: c.version, email });
+                }}
+              >
+                <TextInput
+                  type="email"
+                  aria-label="Подтверждённый email клиента"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+                <Button
+                  type="submit"
+                  size="xs"
+                  variant="subtle"
+                  disabled={busy || !email.trim()}
+                >
+                  Подтвердить email
+                </Button>
+              </form>
+            )}
             <h4>{t("phone")}</h4>
             {!c.phones.length && <p className="muted">{t("noPhone")}</p>}
             {c.phones.map((p) => (
@@ -524,7 +574,9 @@ function CustomerView({
                 <small>
                   {n.author} · {time(n.created_at)}
                 </small>
-                <p dir="auto">{n.text}</p>
+                <p dir="auto">
+                  <NumberLinks text={n.text} />
+                </p>
               </article>
             ))}
             {c.notes_more && <p>{t("moreNotes")}</p>}
@@ -878,7 +930,8 @@ export function CustomersPage({ user }: { user: User }) {
                       onClick={() => show(c.id)}
                     >
                       {c.display_name}
-                    </button>
+                    </button>{" "}
+                    <CustomerNumber value={c.client_number} />
                     <div className="customer-tags">
                       {c.tags.map((tag) => (
                         <Badge key={tag} size="xs" variant="light">

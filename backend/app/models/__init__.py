@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -43,6 +44,7 @@ class User(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     manager_language: Mapped[str] = mapped_column(String(20), default="en")
+    summary_language: Mapped[str | None] = mapped_column(String(20))
     notification_prefs: Mapped[dict] = mapped_column(JSONB, default=dict)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(30))
     totp_secret: Mapped[str | None] = mapped_column(Text)
@@ -274,6 +276,9 @@ class Customer(Base):
     translate_outgoing: Mapped[bool] = mapped_column(Boolean, default=False)
     translation_client_language: Mapped[str] = mapped_column(String(20), default="auto")
     translation_manager_language: Mapped[str] = mapped_column(String(20), default="ru")
+    order_count: Mapped[int | None] = mapped_column(Integer)
+    order_config: Mapped[str | None] = mapped_column(String(64))
+    customer_type: Mapped[str] = mapped_column(String(8), default="retail", server_default="retail")
     segment: Mapped[str] = mapped_column(String(20), default="")
     country: Mapped[str] = mapped_column(String(2), default="")
     tags: Mapped[list] = mapped_column(JSONB, default=list)
@@ -283,6 +288,31 @@ class Customer(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class CustomerAvatar(Base):
+    __tablename__ = "customer_avatars"
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), primary_key=True)
+    source: Mapped[str] = mapped_column(Text)
+    photo: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    mime: Mapped[str | None] = mapped_column(String(24))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CustomerProfileNote(Base):
+    __tablename__ = "customer_profile_notes"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), index=True)
+    author_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    body: Mapped[str] = mapped_column(String(2000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CustomerNumber(Base):
+    __tablename__ = "customer_numbers"
+    number: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), index=True)
 
 
 class CustomerIdentity(Base):
@@ -470,3 +500,14 @@ class MessageTranslation(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CustomerOneCLink(Base):
+    __tablename__ = "customer_onec_links"
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), primary_key=True)
+    config: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    lookup_phone: Mapped[str] = mapped_column(String(20))
+    excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+    snapshot: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    next_check: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
