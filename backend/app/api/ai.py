@@ -14,7 +14,6 @@ from app.api.inbox import (
     describe_message,
     enqueue,
     locked_conversation,
-    message_activity,
     translate_before_send,
     writer,
 )
@@ -261,7 +260,7 @@ def conversation_summary(
     if not key:
         raise HTTPException(409, "Ключ OpenAI не настроен")
 
-    activity = message_activity()
+    activity = Message.timeline_at
     rows = db.execute(
         select(
             activity.label("at"),

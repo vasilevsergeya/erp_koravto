@@ -52,12 +52,12 @@ def normalized_phone(chat_id: str) -> str:
     return chat_id[:100]
 
 
-def message_time(value) -> datetime:
+def message_time(value) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
     except (ValueError, TypeError):
-        return now()
+        return None
 
 
 def advance_status(old: str, new: str) -> str:
@@ -107,7 +107,11 @@ async def process_webhook(ctx, event_id: str):
                         Message.external_id == item["messageId"],
                     )
                 )
+                timestamp = message_time(item.get("dateTime"))
+                original = not item.get("isEdited") and not item.get("isDeleted")
                 if existing:
+                    if existing.direction == "out" and original and existing.provider_at is None:
+                        existing.provider_at = timestamp
                     existing.status = advance_status(
                         existing.status, str(item.get("status", existing.status))
                     )
@@ -165,7 +169,7 @@ async def process_webhook(ctx, event_id: str):
                 attach_conversation(db, conversation)
                 remember_avatar(db, conversation.customer_id, item)
                 inbound = item.get("status") == "inbound" and not item.get("isEcho")
-                timestamp = message_time(item.get("dateTime"))
+                created_at = timestamp or now()
                 message = Message(
                     conversation_id=conversation.id,
                     channel_id=item["channelId"],
@@ -175,7 +179,8 @@ async def process_webhook(ctx, event_id: str):
                     body=str(item.get("text") or "")[:100000],
                     kind=str(item.get("type", "text"))[:40],
                     status=str(item.get("status", "inbound"))[:40],
-                    created_at=timestamp,
+                    created_at=created_at,
+                    provider_at=timestamp if original and not inbound else None,
                     edited=bool(item.get("isEdited")),
                     deleted=bool(item.get("isDeleted")),
                 )
@@ -240,8 +245,8 @@ async def process_webhook(ctx, event_id: str):
                     if sending:
                         message.reply_through_seq = 0
                     supersede(db, conversation.id, "manual_reply")
-                if timestamp >= conversation.updated_at:
-                    conversation.updated_at = timestamp
+                if created_at >= conversation.updated_at:
+                    conversation.updated_at = created_at
                 acknowledge_reply(db, conversation, message)
                 refresh_unanswered(db, conversation)
                 changed.add(conversation.id)

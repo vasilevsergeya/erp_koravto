@@ -13,8 +13,11 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    case,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -175,7 +178,22 @@ class Message(Base):
     send_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+    @hybrid_property
+    def timeline_at(self):
+        if self.direction == "out":
+            return self.provider_at or self.sent_at or self.created_at
+        return self.created_at
+
+    @timeline_at.inplace.expression
+    @classmethod
+    def _timeline_expression(cls):
+        return case(
+            (cls.direction == "out", func.coalesce(cls.provider_at, cls.sent_at, cls.created_at)),
+            else_=cls.created_at,
+        )
 
 
 class Attachment(Base):

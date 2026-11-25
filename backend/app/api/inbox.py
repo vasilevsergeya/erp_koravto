@@ -2,7 +2,7 @@ import asyncio
 import mimetypes
 import uuid
 from collections import Counter
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Literal
 from urllib.parse import quote
 
@@ -10,7 +10,7 @@ import phonenumbers
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from itsdangerous import BadSignature, SignatureExpired
 from pydantic import BaseModel, Field
-from sqlalchemy import Text, and_, case, cast, func, or_, select, text
+from sqlalchemy import Text, and_, cast, func, or_, select, text
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -86,16 +86,9 @@ def pending_draft():
     )
 
 
-def message_activity():
-    return case(
-        (Message.direction == "out", func.coalesce(Message.sent_at, Message.created_at)),
-        else_=Message.created_at,
-    )
-
-
 def last_activity():
     return (
-        select(func.max(message_activity()))
+        select(func.max(Message.timeline_at))
         .where(
             Message.conversation_id == Conversation.id,
             Message.is_private_note.is_(False),
@@ -140,7 +133,7 @@ def describe_conversation(c, db, user_id=None, *, cards=None, onec_settings=None
             .where(MessageHidden.message_id == Message.id, MessageHidden.user_id == user_id)
             .exists(),
         )
-        .order_by(message_activity().desc(), Message.id.desc())
+        .order_by(Message.timeline_at.desc(), Message.id.desc())
         .limit(1)
     )
     return {
@@ -166,7 +159,7 @@ def describe_conversation(c, db, user_id=None, *, cards=None, onec_settings=None
         "chat_type": c.chat_type,
         "channel_id": c.channel_id,
         "state": c.state,
-        "updated_at": (last.sent_at or last.created_at) if last else c.created_at,
+        "updated_at": last.timeline_at if last else c.created_at,
         "inbound_seq": c.inbound_seq,
         "translation": {
             "translate_incoming": incoming_enabled(
@@ -277,7 +270,8 @@ def describe_message(m, db, user_id=None):
         else [entry for entry in history if isinstance(entry.get("body"), str)],
         "content": rich_content(m.kind, "" if m.deleted else m.body),
         "deleted": m.deleted,
-        "created_at": (m.sent_at or m.created_at) if m.direction == "out" else m.created_at,
+        # The inbox merges pages by this ISO string. Use one offset and fixed precision.
+        "created_at": m.timeline_at.astimezone(timezone.utc).isoformat(timespec="microseconds"),
         "is_private_note": m.is_private_note,
         "error_code": m.error_code,
         "error_text": error_text(m.error_code),
@@ -479,7 +473,7 @@ def messages(
         if len(keys) > 100:
             raise HTTPException(400, "Не более 100 сообщений")
         rows = db.scalars(
-            query.where(Message.id.in_(keys)).order_by(message_activity(), Message.id)
+            query.where(Message.id.in_(keys)).order_by(Message.timeline_at, Message.id)
         ).all()
         result = [describe_message(m, db, user.id) for m in rows]
         db.commit()
@@ -490,13 +484,12 @@ def messages(
             raise HTTPException(400, "Некорректный курсор")
         query = query.where(
             or_(
-                message_activity() < (cursor.sent_at or cursor.created_at),
-                (message_activity() == (cursor.sent_at or cursor.created_at))
-                & (Message.id < cursor.id),
+                Message.timeline_at < cursor.timeline_at,
+                (Message.timeline_at == cursor.timeline_at) & (Message.id < cursor.id),
             )
         )
     rows = db.scalars(
-        query.order_by(message_activity().desc(), Message.id.desc()).offset(offset).limit(50)
+        query.order_by(Message.timeline_at.desc(), Message.id.desc()).offset(offset).limit(50)
     ).all()
     result = [describe_message(m, db, user.id) for m in reversed(rows)]
     db.commit()

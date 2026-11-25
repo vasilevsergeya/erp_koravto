@@ -186,6 +186,7 @@ async def deliver_message(ctx, message_id):
                     .with_for_update()
                 )
                 if echo:
+                    msg.provider_at = echo.provider_at
                     msg.status = status_forward("sent", echo.status)
                     db.execute(
                         update(Message)
