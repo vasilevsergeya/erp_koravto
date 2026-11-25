@@ -18,6 +18,7 @@ SETTING_SCHEMA = {
     "tasks.workdays": ("string", False, "1,2,3,4,5"),
     "inbox.first_messages_per_hour": ("integer", False, 20),
     "inbox.auto_close_days": ("integer", False, 14),
+    "gmail.credentials": ("string", True, ""),
     "wazzup.api_key": ("string", True, ""),
     "wazzup.default_channel_id": ("string", False, ""),
     "openai.api_key": ("string", True, ""),
@@ -92,7 +93,7 @@ def masked_settings(db) -> list[dict]:
                 "is_secret": secret,
                 "is_set": bool(value),
                 "value": (
-                    ("••••" if key == "onec.password" else "••••" + str(value)[-4:])
+                    ("••••" if key in ("onec.password", "gmail.credentials") else "••••" + str(value)[-4:])
                     if value
                     else ""
                 )
