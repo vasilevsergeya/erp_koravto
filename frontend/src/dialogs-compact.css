@@ -121,6 +121,9 @@
   padding: 0 4px;
   height: 15px;
 }
+.crm-list-end {
+  height: 1px;
+}
 .crm-list-loading {
   text-align: center;
   height: 24px;
