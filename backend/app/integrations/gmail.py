@@ -88,6 +88,13 @@ class PlainHTML(HTMLParser):
             self.text.append(data)
 
 
+def html_to_text(body):
+    parser = PlainHTML()
+    parser.feed(body)
+    parser.close()
+    return re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", "".join(parser.text))
+
+
 def decoded_header(value):
     try:
         return str(make_header(decode_header(value)))
@@ -137,10 +144,7 @@ def message_body(part, attachments):
     except LookupError:
         body = raw.decode(errors="replace")
     if kind == "text/html":
-        parser = PlainHTML()
-        parser.feed(body)
-        parser.close()
-        body = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", "".join(parser.text))
+        body = html_to_text(body)
     return body.strip()
 
 

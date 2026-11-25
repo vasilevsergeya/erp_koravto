@@ -1,7 +1,9 @@
+import json
+import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +20,7 @@ from app.core.settings import (
 )
 from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
 from app.integrations.gmail import GmailError, credentials
+from app.integrations.gmail_imap import GmailImapMailbox, app_password, imap_credentials
 from app.integrations.onec import OneCError, customer_endpoint
 from app.models import AuditEvent, User, WebhookEvent
 from app.services.parts_pricing import FORMULA_KEY, SaleFormula
@@ -105,6 +108,61 @@ def callback_url(db):
     if not token:
         raise HTTPException(503, "Выполните первоначальную настройку системы")
     return config().public_url + "/api/webhooks/wazzup/" + token
+
+
+class GmailConnectionInput(BaseModel):
+    email: str = Field(max_length=254)
+    password: SecretStr = Field(max_length=80)
+
+
+@router.get("/gmail/connection")
+def gmail_connection(user=Depends(admin_user), db: Session = Depends(get_db)):
+    saved = direct_secret(db, "gmail.credentials")
+    mailbox = imap_credentials(saved)
+    return {
+        "email": mailbox.email if mailbox else "",
+        "mode": "imap" if mailbox else ("oauth" if saved else ""),
+    }
+
+
+@router.put("/gmail/connection")
+async def connect_gmail(
+    body: GmailConnectionInput, user=Depends(admin_user), db: Session = Depends(get_db)
+):
+    email = body.email.strip()
+    if not re.fullmatch(r"[a-zA-Z0-9._+%-]+@[a-zA-Z0-9-]+(?:[.][a-zA-Z0-9-]+)+", email):
+        raise HTTPException(400, "Введите полный адрес почтового ящика Google.")
+    try:
+        password = app_password(body.password.get_secret_value())
+    except GmailError:
+        raise HTTPException(
+            400, "Пароль приложения должен содержать 16 символов. Пробелы между группами допустимы."
+        ) from None
+    try:
+        await GmailImapMailbox(email, password).check()
+    except GmailError as exc:
+        if str(exc) == "imap_login":
+            raise HTTPException(
+                400, "Google отклонил вход. Проверьте адрес ящика и пароль приложения."
+            ) from None
+        if str(exc) == "all_mail_hidden":
+            raise HTTPException(
+                400, "В настройках ярлыков Gmail включите показ папки «Вся почта» в IMAP."
+            ) from None
+        raise HTTPException(
+            502,
+            "Не удалось подключиться к imap.gmail.com. Проверьте доступ к IMAP и повторите попытку.",
+        ) from None
+    put_setting(
+        db,
+        "gmail.credentials",
+        json.dumps({"email": email, "app_password": password}),
+        True,
+        user.id,
+    )
+    db.commit()
+    invalidate_settings()
+    return {"email": email, "mode": "imap"}
 
 
 @router.get("/wazzup/status")

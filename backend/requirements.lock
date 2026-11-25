@@ -70,6 +70,8 @@ idna==3.20
     #   anyio
     #   httpx
     #   yarl
+imapclient==3.0.1
+    # via -r backend/requirements.in
 itsdangerous==2.2.0
     # via -r backend/requirements.in
 jmespath==1.1.0

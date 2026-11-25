@@ -28,7 +28,7 @@ type Summary = {
   snippet: string;
   at: number;
   unread: boolean;
-  count: number;
+  count: number | null;
 };
 type Letter = {
   id: string;
@@ -201,6 +201,7 @@ export function MailPage({
     queryFn: () =>
       api<Thread>("/api/mail/threads/" + encodeURIComponent(active!.id)),
   });
+  const count = thread.data?.count ?? active?.count;
   function submit(event: FormEvent) {
     event.preventDefault();
     select("");
@@ -340,7 +341,7 @@ export function MailPage({
               <>
                 <div className="mail-subject">
                   <h2 dir="auto">{active.subject || "Без темы"}</h2>
-                  <small>Писем в цепочке · {active.count}</small>
+                  {count != null && <small>Писем в цепочке · {count}</small>}
                 </div>
                 <div className="mail-letters" key={active.id}>
                   {thread.isLoading && (

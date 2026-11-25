@@ -176,12 +176,38 @@ class MailAcceptance(unittest.TestCase):
             client.headers["X-CSRF-Token"] = raw
             path = "/api/settings/gmail.credentials"
             self.assertEqual(client.put(path, json={"value": "demo-token"}).json()["value"], "••••")
+            conn = "/api/settings/gmail/connection"
+            self.assertEqual(client.get(conn).json()["mode"], "oauth")
+            with patch("app.api.settings.GmailImapMailbox.check") as check:
+                self.assertEqual(
+                    client.put(conn, json={"email": BOX, "password": "short"}).status_code, 400
+                )
+                check.assert_not_called()
+                payload = {"email": BOX, "password": "abcd efgh ijkl mnop"}
+                from app.integrations.gmail import GmailError
+
+                check.side_effect = GmailError("imap_login")
+                self.assertEqual(client.put(conn, json=payload).status_code, 400)
+                self.assertEqual(client.get(conn).json()["mode"], "oauth")
+                check.side_effect = None
+                self.assertEqual(
+                    client.put(conn, json=payload).json(), {"email": BOX, "mode": "imap"}
+                )
+                self.assertEqual(client.get(conn).json(), {"email": BOX, "mode": "imap"})
+                with SessionLocal() as db:
+                    self.assertNotIn(
+                        "abcdefghijklmnop", str(db.get(Setting, "gmail.credentials").value)
+                    )
+                self.assertNotIn("abcdefghijklmnop", client.get("/api/settings").text)
+                self.assertEqual(client.put(path, json={"value": "demo-token"}).status_code, 200)
             with SessionLocal() as db:
                 self.assertNotIn("demo-token", str(db.get(Setting, "gmail.credentials").value))
                 db.get(User, admin_id).role = "manager"
                 db.commit()
             self.assertEqual(client.put(path, json={"value": ""}).status_code, 403)
             self.assertEqual(client.get("/api/settings").status_code, 403)
+            self.assertEqual(client.put(conn, json=payload).status_code, 403)
+            self.assertEqual(client.get(conn).status_code, 403)
             calls = []
 
             def handler(req):
