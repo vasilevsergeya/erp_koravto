@@ -136,10 +136,11 @@ class OneCAdapter:
                     matched = exact_phone(item["matched_phone"])
                     if matched:
                         customer["matched_phone"] = matched
-                if "country" in item:
-                    if not isinstance(item["country"], str):
-                        raise ValueError
-                    customer["country"] = item["country"]
+                for key in ("country", "email"):
+                    if key in item:
+                        if not isinstance(item[key], str):
+                            raise ValueError
+                        customer[key] = item[key]
                 if "orders" in item:
                     orders = item["orders"]
                     if not isinstance(orders, list) or len(orders) != len(item["realizations"]):
@@ -169,10 +170,11 @@ class OneCAdapter:
                                 if type(order[key]) is not bool:
                                     raise ValueError
                                 details[-1][key] = order[key]
-                        if "order_id" in order:
-                            if not isinstance(order["order_id"], str):
-                                raise ValueError
-                            details[-1]["order_id"] = order["order_id"]
+                        for key in ("order_id", "number_1c", "sales_channel_number"):
+                            if key in order:
+                                if not isinstance(order[key], str):
+                                    raise ValueError
+                                details[-1][key] = order[key]
                     customer["orders"] = details
                 clients.append(customer)
             return clients

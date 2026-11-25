@@ -812,6 +812,14 @@ export function Inbox({ user }: { user: User }) {
         <span>Телефон:</span>
         <a href={"tel:" + c?.phone}>{c?.phone || "—"}</a>
       </div>
+      {onec?.clients.length === 1 && (
+        <div className="crm-detail-row">
+          <span>{t("onecOrders:email")}:</span>
+          <b dir="auto" title={onec.clients[0].email}>
+            {onec.clients[0].email || "—"}
+          </b>
+        </div>
+      )}
       <div
         className="crm-detail-row"
         title="Регион телефонного номера, не место проживания клиента"
@@ -908,7 +916,12 @@ export function Inbox({ user }: { user: User }) {
             )}
             <OneCCandidates candidates={onec.candidates} compact />
             {onec.clients.map((client, index) => (
-              <OneCCustomerDetails key={index} client={client} compact />
+              <OneCCustomerDetails
+                key={index}
+                client={client}
+                compact
+                showEmail={false}
+              />
             ))}
             {onec.stale && <p className="crm-onec-stale">{t("onecStale")}</p>}
             {onec.checked_at && onec.status !== "not_found" && (

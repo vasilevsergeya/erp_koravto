@@ -70,15 +70,25 @@ class OneCContractTests(unittest.IsolatedAsyncioTestCase):
             {
                 "name": "Synthetic customer",
                 "country": "Australia",
+                "email": "customer@example.com",
                 "realizations": ["000123", "000123"],
                 "orders": [
                     {
                         "number": "000123",
+                        "number_1c": "КА00-000146",
+                        "sales_channel_number": "000123",
                         "amount": 1234.56,
                         "shipping_number": "001234567890",
                         "project": "Korean.parts",
                     },
-                    {"number": "000123", "amount": 0, "shipping_number": "", "project": ""},
+                    {
+                        "number": "000123",
+                        "number_1c": "000123",
+                        "sales_channel_number": "",
+                        "amount": 0,
+                        "shipping_number": "",
+                        "project": "",
+                    },
                 ],
             },
             {"name": "Synthetic customer", "country": "", "realizations": [], "orders": []},
@@ -93,10 +103,12 @@ class OneCContractTests(unittest.IsolatedAsyncioTestCase):
         order = {"number": "000123", "amount": 12.34, "shipping_number": "0001", "project": "Web"}
         invalid = [
             {"country": None},
+            {"email": ["customer@example.com"]},
             {"orders": None},
             {"orders": []},
             {"orders": [order, order]},
             {"orders": [{**order, "number": "different-order"}]},
+            {"orders": [{**order, "number_1c": 123}]},
             {"orders": [{**order, "shipping_number": 1}]},
             {"orders": [{**order, "project": {"name": "Web"}}]},
             *({"orders": [{**order, "amount": amount}]} for amount in (None, "12.34", True)),

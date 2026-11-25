@@ -4,6 +4,7 @@ import "./onec-orders.css";
 
 export type OneCOrder = {
   number: string;
+  number_1c?: string;
   amount: number;
   shipping_number: string;
   project: string;
@@ -12,6 +13,7 @@ export type OneCOrder = {
 export type OneCClient = {
   name: string;
   country?: string;
+  email?: string;
   matched_phone?: string;
   realizations: string[];
   orders?: OneCOrder[];
@@ -20,6 +22,9 @@ export type OneCClient = {
 i18n.addResourceBundle("ru", "onecOrders", {
   possibleMatch: "Возможное совпадение",
   country: "Страна из 1С",
+  email: "Email",
+  channelOrderNumber: "Номер в канале продаж",
+  onecOrderNumber: "Номер в 1С",
   orders: "Заказы",
   orderNumber: "Заказ",
   amount: "Сумма",
@@ -31,6 +36,9 @@ i18n.addResourceBundle("ru", "onecOrders", {
 i18n.addResourceBundle("en", "onecOrders", {
   possibleMatch: "Possible match",
   country: "Country in 1C",
+  email: "Email",
+  channelOrderNumber: "Sales channel order number",
+  onecOrderNumber: "1C order number",
   orders: "Orders",
   orderNumber: "Order",
   amount: "Amount",
@@ -43,9 +51,11 @@ i18n.addResourceBundle("en", "onecOrders", {
 export function OneCCustomerDetails({
   client,
   compact = false,
+  showEmail = true,
 }: {
   client: OneCClient;
   compact?: boolean;
+  showEmail?: boolean;
 }) {
   const { t, i18n } = useTranslation("onecOrders");
   const orders: (OneCOrder | Pick<OneCOrder, "number">)[] =
@@ -64,6 +74,12 @@ export function OneCCustomerDetails({
         <dt>{t("country")}</dt>
         <dd dir="auto">{client.country || "—"}</dd>
       </dl>
+      {showEmail && (
+        <dl className="onec-country">
+          <dt>{t("email")}</dt>
+          <dd dir="auto">{client.email || "—"}</dd>
+        </dl>
+      )}
       <p className="onec-order-count">
         {t("orders")} · {orders.length}
       </p>
@@ -76,11 +92,17 @@ export function OneCCustomerDetails({
             {orders.map((order, index) => (
               <li className="onec-order-card" key={index}>
                 <div className="onec-order-heading">
-                  <span>{t("orderNumber")}</span>
+                  <span>
+                    {t("amount" in order ? "channelOrderNumber" : "orderNumber")}
+                  </span>
                   <b dir="auto">{order.number}</b>
                 </div>
                 {"amount" in order && (
                   <dl className="onec-order-fields">
+                    <div>
+                      <dt>{t("onecOrderNumber")}</dt>
+                      <dd dir="auto">{order.number_1c || "—"}</dd>
+                    </div>
                     <div>
                       <dt>{t("amount")}</dt>
                       <dd className="onec-order-amount">
