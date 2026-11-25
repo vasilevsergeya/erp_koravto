@@ -1,9 +1,11 @@
 """Synthetic acceptance of decisions, cancellation, provider isolation and notification delivery."""
 
 import asyncio
+import json
 import os
 import unittest
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -26,6 +28,7 @@ from app.models import (
     Customer,
     LoginSession,
     Message,
+    MessageHidden,
     Notification,
     NotificationDelivery,
     Setting,
@@ -45,6 +48,7 @@ from app.services.ai import (
     queue_inbound,
 )
 from app.services.ai_config import AIConfig, config_version, working_time
+from app.services.dialog_summary import message_batches, summarize
 from app.services.notifications import DeliveryError, deliver_notification, prepare_deliveries
 from app.services.outbox import deliver_message
 from app.services.parts_pricing import FORMULA_KEY
@@ -52,8 +56,6 @@ from app.workers.worker import process_webhook
 
 
 def output(value):
-    import json
-
     return [{"type": "message", "content": [{"type": "output_text", "text": json.dumps(value)}]}]
 
 
@@ -77,6 +79,23 @@ def classification(intent="shipping", **kwargs):
 
 
 class PolicyTests(unittest.TestCase):
+    def test_summary_carries_earlier_context_and_requires_a_task(self):
+        row = SimpleNamespace(
+            text="123456789", at=now(), kind="text", direction="in", status="inbound"
+        )
+        batches = list(message_batches([row], char_limit=5))
+        self.assertEqual([batch[0]["text"] for batch in batches], ["12345", "6789"])
+        adapter = AsyncMock()
+        first = {"summary": "First question.", "task": "Check the part."}
+        final = {"summary": "Question resolved.", "task": "No action needed."}
+        adapter.response.side_effect = [output(first), output(final)]
+        self.assertEqual(asyncio.run(summarize(adapter, "model", "en", batches)), final)
+        last_call = adapter.response.await_args_list[-1].args
+        self.assertEqual(json.loads(last_call[2][0]["content"])["previous"], first)
+        adapter.response.side_effect = [output({"summary": "Summary", "task": " "})]
+        with self.assertRaises(AIError):
+            asyncio.run(summarize(adapter, "model", "en", batches))
+
     def test_read_only_tool_limit_and_shipping_facts(self):
         cfg = AIConfig()
         c = Classification.model_validate(classification())
@@ -245,6 +264,40 @@ class AIAcceptance(unittest.TestCase):
             asyncio.run(process_draft({}, self.did))
         with SessionLocal() as db:
             return db.get(AIDraft, self.did)
+
+    def test_summary_is_private_and_scoped_to_visible_history(self):
+        path = f"/api/conversations/{self.cid}/summary"
+        with SessionLocal() as db:
+            for attrs in [
+                {"body": "private note", "is_private_note": True},
+                {"body": "removed", "deleted": True},
+                {"body": "system entry", "author_type": "system"},
+                {"body": "hidden"},
+                {"body": "manager original", "delivery_body": "Sent wording", "status": "sent"},
+            ]:
+                fields = dict(direction="out", author_type="user", channel_id=self.cid)
+                message = Message(conversation_id=self.cid, external_id=uid(), **(fields | attrs))
+                db.add(message)
+                db.flush()
+                if message.body == "hidden":
+                    db.add(MessageHidden(user_id=self.user, message_id=message.id))
+            db.commit()
+            count = db.scalar(select(func.count()).select_from(Message))
+        self.assertEqual(self.staff_client.post(path, json={"language": "ru"}).status_code, 403)
+        self.assertEqual(self.client.post(path, json={"language": "not a language"}).status_code, 422)
+        value = {"summary": "Клиент спросил о доставке.", "task": "Уточнить срок доставки."}
+        with patch.object(OpenAIAdapter, "response", AsyncMock(return_value=output(value))) as model:
+            response = self.client.post(path, json={"language": "ru"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), value)
+            _, instructions, inputs, _ = model.await_args.args
+            self.assertIn("ru.", instructions)
+            messages = json.loads(inputs[0]["content"])["messages"]
+            self.assertEqual([m["speaker"] for m in messages], ["customer", "business"])
+            self.assertEqual(messages[-1]["text"], "Sent wording")
+        with SessionLocal() as db:
+            self.assertEqual(db.scalar(select(func.count()).select_from(Message)), count)
+            self.assertEqual(db.get(AIDraft, self.did).decision, "pending")
 
     def test_catalog_quote_reaches_outbox_and_formula_change_stops_old_quote(self):
         self.configure(modes={**self.cfg.modes, "availability_price": ["auto", "auto"]})

@@ -1,4 +1,5 @@
 export type CustomerLite = {
+  client_number?: string | null;
   id: string;
   version: number;
   name: string;

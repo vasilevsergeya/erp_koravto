@@ -1,9 +1,10 @@
 import uuid
+from datetime import timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import Text, cast, func, or_, select
+from sqlalchemy import Text, cast, func, or_, select, update
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -12,27 +13,42 @@ from app.api.inbox import writer
 from app.api.tasks import csv_response
 from app.api.tasks import describe as describe_task
 from app.core.db import get_db
+from app.integrations.onec import OneCAdapter, OneCError, exact_phone
 from app.models import (
     AuditEvent,
     Conversation,
     Customer,
+    CustomerAvatar,
     CustomerEvent,
     CustomerIdentity,
     CustomerNote,
+    CustomerNumber,
+    CustomerOneCLink,
+    CustomerProfileNote,
     Task,
     User,
     now,
 )
+from app.services.customer_orders import recalculate
 from app.services.customers import (
     chat_identity,
     customer_row,
+    display_number,
     event,
+    latest_profile_note,
+    numbered_customer,
+    parse_customer_number,
     phone_identity,
     publish_customers,
     structure_lock,
     touch,
 )
-from app.services.onec_customers import customer_snapshot, refresh_customer
+from app.services.onec_customers import (
+    confirmed_emails,
+    connection_settings,
+    customer_snapshot,
+    refresh_customer,
+)
 from app.services.tasks import history
 
 router = APIRouter(prefix="/api", tags=["customers"])
@@ -133,6 +149,8 @@ def summary(db, customer, chats=None):
     return {
         "id": customer.id,
         "version": customer.version,
+        "customer_type": customer.customer_type,
+        "client_number": display_number(db, customer.id),
         **{field: getattr(customer, field) for field in Profile.model_fields},
         "display_name": display_name or (phones[0].value if phones else "Без имени"),
         "name_manual": customer.name_manual,
@@ -154,6 +172,7 @@ def summary(db, customer, chats=None):
 def detail(db, customer):
     chats = related(db, customer)
     result = summary(db, customer, chats)
+    result["emails"] = sorted(confirmed_emails(db, customer.id))
     notes = db.scalars(
         select(CustomerNote)
         .where(CustomerNote.customer_id == customer.id)
@@ -222,7 +241,10 @@ def detail(db, customer):
 
 def customer_query(q, segment, tag, country, has_open):
     query = select(Customer).where(Customer.merged_into_id.is_(None))
-    if q.strip():
+    number = parse_customer_number(q)
+    if number is not None:
+        query = query.where(Customer.id.in_(numbered_customer(number)))
+    elif q.strip():
         q = q.strip()
         digits = "".join(c for c in q if c.isascii() and c.isdigit())
         identities = select(CustomerIdentity.customer_id).where(
@@ -394,6 +416,8 @@ def edit_customer(
     if changes:
         touch(c)
         event(db, c, user.id, "updated", {"fields": list(changes)})
+    if "order_numbers" in body.model_fields_set:
+        recalculate(db, c.id)
     db.commit()
     publish_customers()
     return detail(db, c)
@@ -495,7 +519,31 @@ def merge_customer(
                 target.name_manual = source.name_manual
     target.tags = list(dict.fromkeys([*target.tags, *source.tags]))
     target.order_numbers = list(dict.fromkeys([*target.order_numbers, *source.order_numbers]))
+    db.execute(
+        update(CustomerProfileNote)
+        .where(CustomerProfileNote.customer_id == source.id)
+        .values(customer_id=target.id)
+    )
+    db.execute(
+        update(CustomerNumber)
+        .where(CustomerNumber.customer_id == source.id)
+        .values(customer_id=target.id)
+    )
+    for link in db.scalars(
+        select(CustomerOneCLink).where(CustomerOneCLink.customer_id == source.id)
+    ):
+        if db.get(CustomerOneCLink, (target.id, link.config, link.account_id)):
+            db.delete(link)
+        else:
+            link.customer_id = target.id
+    if source.customer_type == "partner":
+        target.customer_type = "partner"
+    if not db.get(CustomerAvatar, target.id):
+        photo = db.get(CustomerAvatar, source.id)
+        if photo:
+            photo.customer_id = target.id
     source.merged_into_id = target.id
+    recalculate(db, target.id)
     touch(source)
     touch(target)
     event(
@@ -572,6 +620,8 @@ def detach_identity(
     )
     event(db, target, user.id, "split_created", {"source_id": source.id})
     db.add(AuditEvent(user_id=user.id, action="customer.detached", target=identity.id))
+    recalculate(db, target.id)
+    recalculate(db, source.id)
     db.commit()
     publish_customers()
     return detail(db, target)
@@ -608,3 +658,254 @@ def save_personal_language(
     user.manager_language = body.language
     db.commit()
     return {"language": user.manager_language}
+
+
+class ProfileNoteInput(BaseModel):
+    version: int = Field(ge=0)
+    text: str = Field(max_length=2000)
+
+
+def describe_profile_note(db, note):
+    author = db.get(User, note.author_id) if note and note.author_id else None
+    return {
+        "text": note.body if note else "",
+        "version": note.id if note else 0,
+        "author": author.name if author else None,
+        "updated_at": note.created_at if note else None,
+    }
+
+
+@router.get("/customers/{customer_id}/profile-note")
+def profile_note(customer_id: str, user=Depends(current_user), db: Session = Depends(get_db)):
+    customer_row(db, customer_id)
+    return describe_profile_note(db, latest_profile_note(db, customer_id))
+
+
+@router.put("/customers/{customer_id}/profile-note")
+def save_profile_note(
+    customer_id: str,
+    body: ProfileNoteInput,
+    user=Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    structure_lock(db)
+    customer_row(db, customer_id)
+    current = latest_profile_note(db, customer_id)
+    if (current.id if current else 0) != body.version:
+        raise HTTPException(409, "Другой сотрудник уже изменил заметку")
+    if body.text == (current.body if current else ""):
+        return describe_profile_note(db, current)
+    note = CustomerProfileNote(customer_id=customer_id, author_id=user.id, body=body.text)
+    db.add(note)
+    db.commit()
+    publish_customers()
+    return describe_profile_note(db, note)
+
+
+@router.get("/customers/{customer_id}/profile-note/history")
+def profile_note_history(
+    customer_id: str,
+    before: int | None = None,
+    user=Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "История доступна администратору")
+    customer_row(db, customer_id)
+    stmt = select(CustomerProfileNote).where(CustomerProfileNote.customer_id == customer_id)
+    if before:
+        stmt = stmt.where(CustomerProfileNote.id < before)
+    return [
+        describe_profile_note(db, n)
+        for n in db.scalars(stmt.order_by(CustomerProfileNote.id.desc()).limit(50))
+    ]
+
+
+class CustomerTypeInput(Input):
+    customer_type: Literal["retail", "partner"]
+
+
+@router.put("/customers/{customer_id}/type")
+def change_customer_type(
+    customer_id: str,
+    body: CustomerTypeInput,
+    user=Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    structure_lock(db)
+    customer = customer_row(db, customer_id)
+    if customer.customer_type != body.customer_type:
+        event(
+            db,
+            customer,
+            user.id,
+            "customer_type",
+            {"from": customer.customer_type, "to": body.customer_type},
+        )
+        customer.customer_type = body.customer_type
+        touch(customer)
+        db.commit()
+        publish_customers()
+    return {"customer_type": customer.customer_type}
+
+
+@router.get("/customers/{customer_id}/avatar")
+def avatar(customer_id: str, user=Depends(current_user), db: Session = Depends(get_db)):
+    image = db.get(CustomerAvatar, customer_id)
+    if not image or not image.updated_at:
+        raise HTTPException(404, "Фото отсутствует")
+    return Response(
+        image.photo,
+        media_type=image.mime,
+        headers={"Cache-Control": "private, max-age=604800", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+class CounterpartyInput(Input):
+    phone: str = Field(max_length=30)
+    account_id: str = Field(min_length=1, max_length=128)
+    linked: bool
+
+
+def counterparty_config(db, customer_id):
+    customer_row(db, customer_id)
+    values, fingerprint = connection_settings(db)
+    if not all(values):
+        raise HTTPException(409, "Подключение к 1С не настроено")
+    return values, fingerprint
+
+
+async def lookup_counterparties(values, phone):
+    if not exact_phone(phone):
+        raise HTTPException(422, "Введите международный номер с кодом страны")
+    try:
+        return await OneCAdapter(*values).customers(phone)
+    except OneCError:
+        raise HTTPException(502, "Не удалось получить контрагентов из 1С") from None
+
+
+@router.get("/customers/{customer_id}/counterparties")
+def counterparties(customer_id: str, user=Depends(current_user), db: Session = Depends(get_db)):
+    customer_row(db, customer_id)
+    values, config = connection_settings(db)
+    if not all(values):
+        return []
+    result = {}
+    for c in related(db, db.get(Customer, customer_id)):
+        for account in customer_snapshot(c, db)["clients"]:
+            ref = account.get("counterparty_id")
+            if ref:
+                result[ref] = {"id": ref, "name": account["name"], "phone": c.phone}
+    for link in db.scalars(
+        select(CustomerOneCLink).where(
+            CustomerOneCLink.customer_id == customer_id, CustomerOneCLink.config == config
+        )
+    ):
+        if link.excluded:
+            result.pop(link.account_id, None)
+        else:
+            result[link.account_id] = {
+                "id": link.account_id,
+                "name": (link.snapshot or {}).get("name") or link.account_id,
+                "phone": link.lookup_phone,
+            }
+    return list(result.values())
+
+
+@router.get("/customers/{customer_id}/counterparties/search")
+async def search_counterparties(
+    customer_id: str,
+    phone: str = Query(min_length=5, max_length=30),
+    user=Depends(writer),
+    db: Session = Depends(get_db),
+):
+    values, _ = counterparty_config(db, customer_id)
+    db.rollback()
+    accounts = await lookup_counterparties(values, phone)
+    return [{"id": a.get("counterparty_id"), "name": a["name"], "phone": phone} for a in accounts]
+
+
+@router.put("/customers/{customer_id}/counterparties")
+async def link_counterparty(
+    customer_id: str, body: CounterpartyInput, user=Depends(writer), db: Session = Depends(get_db)
+):
+    values, config = counterparty_config(db, customer_id)
+    db.rollback()
+    account = None
+    if body.linked:
+        accounts = await lookup_counterparties(values, body.phone)
+        account = next((a for a in accounts if a.get("counterparty_id") == body.account_id), None)
+        if not account:
+            raise HTTPException(409, "Контрагент отсутствует в актуальном ответе 1С")
+    structure_lock(db)
+    _, current = counterparty_config(db, customer_id)
+    if current != config:
+        raise HTTPException(409, "Подключение к 1С изменилось")
+    key = (customer_id, config, body.account_id)
+    link = db.get(CustomerOneCLink, key, with_for_update=True)
+    if (
+        not body.linked
+        and not link
+        and not any(a["id"] == body.account_id for a in counterparties(customer_id, user, db))
+    ):
+        raise HTTPException(404, "Контрагент не привязан")
+    if not link:
+        link = CustomerOneCLink(customer_id=customer_id, config=config, account_id=body.account_id)
+        db.add(link)
+    link.lookup_phone = exact_phone(body.phone)
+    link.excluded = not body.linked
+    link.snapshot = account
+    link.next_check = now() + timedelta(minutes=15)
+    event(
+        db,
+        db.get(Customer, customer_id),
+        user.id,
+        "onec_link" if body.linked else "onec_unlink",
+        {"counterparty_id": body.account_id},
+    )
+    recalculate(db, customer_id)
+    db.commit()
+    publish_customers()
+    return {"linked": body.linked}
+
+
+class ConfirmedEmailInput(Version):
+    email: str = Field(max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    remove: bool = False
+
+
+@router.post("/customers/{customer_id}/emails")
+def set_confirmed_email(
+    customer_id: str, body: ConfirmedEmailInput, user=Depends(writer), db: Session = Depends(get_db)
+):
+    structure_lock(db)
+    customer = customer_row(db, customer_id, version=body.version)
+    value = body.email.strip().lower()
+    entry = db.scalar(
+        select(CustomerIdentity).where(
+            CustomerIdentity.type == "email", CustomerIdentity.value == value
+        )
+    )
+    if entry and entry.customer_id != customer_id:
+        raise HTTPException(409, "Email уже принадлежит другому клиенту")
+    if body.remove and entry:
+        db.delete(entry)
+    elif not body.remove and not entry:
+        db.add(
+            CustomerIdentity(
+                customer_id=customer_id, type="email", value=value, verified=True, source="user"
+            )
+        )
+    else:
+        return detail(db, customer)
+    touch(customer)
+    event(db, customer, user.id, "email_removed" if body.remove else "email_confirmed")
+    db.execute(
+        update(Conversation)
+        .where(Conversation.customer_id == customer_id)
+        .values(onec_next_at=None, onec_checked_at=None)
+    )
+    recalculate(db, customer_id)
+    db.commit()
+    publish_customers()
+    return detail(db, customer)

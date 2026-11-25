@@ -1,3 +1,10 @@
+import { Counterparties } from "./Counterparties";
+import { CustomerAvatar } from "./CustomerAvatar";
+import { CustomerFields, CustomerMarks } from "./CustomerMarks";
+import { ProfileNote } from "./ProfileNote";
+import { useMediaQuery } from "@mantine/hooks";
+import { CustomerNumber } from "./CustomerNumber";
+import { useDialogColumns } from "./DialogColumns";
 import { memberOptions, type Member } from "./team";
 import {
   Fragment,
@@ -23,6 +30,7 @@ import {
   Menu,
   Loader,
   Modal,
+  Drawer,
   Popover,
   Select,
   Textarea,
@@ -60,9 +68,10 @@ import { ConversationTasks, createTask, openTask } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
 import { QuickReplyPicker } from "./QuickReplies";
 import { DraftPanel } from "./AI";
+import { DialogSummary, useSummaryLanguage } from "./DialogSummary";
 import { loadDraft, saveDraft, removeDraft } from "./inbox-drafts";
 import { taskLabel } from "./task-i18n";
-import { OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
+import { OneCCandidates, OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
 
 type Channel = {
   channelId: string;
@@ -156,15 +165,40 @@ export function Inbox({ user }: { user: User }) {
   });
   const ownLanguage =
     personalLanguage.data?.language || user.manager_language || "en";
-  const [selected, setSelected] = useState<string | null>(
-    () =>
-      sessionStorage.getItem("crm-open-conversation") ||
-      new URLSearchParams(location.search).get("conversation") ||
-      sessionStorage.getItem(`crm-active-conversation:${user.id}`),
+  const [selected, setSelected] = useState<string | null>(() =>
+    new URLSearchParams(location.search).has("client")
+      ? null
+      : sessionStorage.getItem("crm-open-conversation") ||
+        new URLSearchParams(location.search).get("conversation") ||
+        sessionStorage.getItem(`crm-active-conversation:${user.id}`),
+  );
+  const narrow = useMediaQuery("(max-width:1099px)");
+  const mobile = useMediaQuery("(max-width:699px)");
+  const [noteOpened, setNoteOpened] = useState(0);
+  const [noteHint, setNoteHint] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState<number>();
+  useEffect(() => {
+    if (!mobile || !window.visualViewport) return;
+    const viewport = window.visualViewport;
+    const resize = () => setKeyboardHeight(viewport.height);
+    resize();
+    viewport.addEventListener("resize", resize);
+    return () => viewport.removeEventListener("resize", resize);
+  }, [mobile]);
+  const columns = useDialogColumns(user.id);
+  const [group, setGroup] = useState(
+    () => localStorage.getItem(`crm-customer-filter:${user.id}`) || "all",
+  );
+  const [sort, setSort] = useState(() =>
+    localStorage.getItem(`crm-dialog-sort:${user.id}`) === "oldest"
+      ? "oldest"
+      : "newest",
   );
   const [filter, setFilter] = useState(() => {
     const saved = localStorage.getItem(`crm-dialog-filter:${user.id}`);
-    return saved && ["waiting_us", "mine", "ai_draft", "closed"].includes(saved) ? saved : "all";
+    return saved && ["waiting_us", "mine", "ai_draft", "closed"].includes(saved)
+      ? saved
+      : "all";
   });
   const [panelOpen, setPanelOpen] = useState(() => {
     const saved = localStorage.getItem(`crm-customer-panel:${user.id}`);
@@ -192,8 +226,10 @@ export function Inbox({ user }: { user: User }) {
         top: row.offsetTop - el.scrollTop,
       };
   }
-  const [search, setSearch] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [search, setSearch] = useState(
+    () => new URLSearchParams(location.search).get("client") || "",
+  );
+  const [searchQuery, setSearchQuery] = useState(search);
   const initialDraft = useRef(loadDraft(user.id, selected));
   const [message, setMessage] = useState(initialDraft.current?.text || "");
   const [editingDraft, setEditingDraft] = useState<string | null>(
@@ -280,6 +316,7 @@ export function Inbox({ user }: { user: User }) {
     >
   >({});
   const canWrite = user.role === "admin" || user.role === "manager";
+  const summaryPreference = useSummaryLanguage(user.id, canWrite, ownLanguage);
   useEffect(() => {
     if (selected)
       saveDraft(user.id, selected, {
@@ -316,6 +353,8 @@ export function Inbox({ user }: { user: User }) {
   }, [search]);
   const params = new URLSearchParams({
     q: searchQuery,
+    sort,
+    group,
   });
   if (filter === "waiting_us" || filter === "closed")
     params.set("state", filter);
@@ -347,8 +386,9 @@ export function Inbox({ user }: { user: User }) {
     if (row) el.scrollTop = row.offsetTop - anchor.top;
   }, [conversations.data]);
   const counters = useQuery({
-    queryKey: ["conversation-counts", user.id],
-    queryFn: () => api<Record<string, number>>("/api/conversations/counts"),
+    queryKey: ["conversation-counts", user.id, group],
+    queryFn: () =>
+      api<Record<string, number>>("/api/conversations/counts?group=" + group),
     refetchInterval: 5000,
   });
   const current = useQuery({
@@ -452,6 +492,8 @@ export function Inbox({ user }: { user: User }) {
       const draft = id
         ? drafts.current[id] || loadDraft(user.id, id)
         : undefined;
+      setNoteOpened(0);
+      setNoteHint(false);
       initialScroll.current = null;
       stickToBottom.current = true;
       setSelected(id);
@@ -492,6 +534,15 @@ export function Inbox({ user }: { user: User }) {
     window.addEventListener("crm:conversation", show);
     return () => window.removeEventListener("crm:conversation", show);
   }, [choose]);
+  const clientLink = useRef(new URLSearchParams(location.search).get("client"));
+  useEffect(() => {
+    const target = clientLink.current;
+    const first = conversations.data?.pages[0]?.[0];
+    if (target && searchQuery === target && first) {
+      clientLink.current = null;
+      choose(first.id);
+    }
+  }, [choose, conversations.data, searchQuery]);
   function attachFile(value: File | null) {
     if (value && value.size > 10 * 1024 * 1024) {
       setError(t("fileLimit"));
@@ -685,9 +736,63 @@ export function Inbox({ user }: { user: User }) {
   const c = current.data;
   const onec = customer.data;
   const displayName = c?.display_name || c?.name || c?.phone;
+  function openCard() {
+    if (narrow) {
+      if (!cardOpen)
+        history.pushState({ ...history.state, crmCard: selected }, "");
+      setCardOpen(true);
+    } else {
+      setPanelOpen(true);
+      localStorage.setItem(`crm-customer-panel:${user.id}`, "true");
+    }
+  }
+  function closeCard() {
+    setNoteHint(false);
+    setCardOpen(false);
+    if (history.state?.crmCard) history.back();
+  }
+  useEffect(() => {
+    const onBack = () => setCardOpen(false);
+    window.addEventListener("popstate", onBack);
+    return () => window.removeEventListener("popstate", onBack);
+  }, []);
+  const dialogTools = c && (
+    <>
+      {canWrite && (
+        <DialogSummary
+          key={c.id}
+          conversationId={c.id}
+          preference={summaryPreference}
+        />
+      )}
+      {c.customer_id && (
+        <TranslationPreferences
+          key={c.customer_id}
+          customerId={c.customer_id}
+          canWrite={canWrite}
+          original={!!originals[c.id]}
+          onOriginal={(value) => setOriginals((p) => ({ ...p, [c.id]: value }))}
+        />
+      )}
+    </>
+  );
   const customerCard = (
-    <div className="crm-customer-content">
-      {c?.customer_id && <CustomerSidebar id={c.customer_id} compact />}
+    <div
+      className="crm-customer-content"
+      onPointerDown={(e) => {
+        if (
+          noteHint &&
+          !(e.target as HTMLElement).closest(".crm-note-touch-tip")
+        )
+          setNoteHint(false);
+      }}
+    >
+      {c?.customer_id && (
+        <div className="crm-card-identity">
+          <CustomerSidebar id={c.customer_id} compact />
+          <CustomerNumber value={c.client_number} />
+        </div>
+      )}
       <DetailField
         label={t("chatName")}
         value={c?.name || ""}
@@ -707,6 +812,14 @@ export function Inbox({ user }: { user: User }) {
         <span>Телефон:</span>
         <a href={"tel:" + c?.phone}>{c?.phone || "—"}</a>
       </div>
+      {onec?.clients.length === 1 && (
+        <div className="crm-detail-row">
+          <span>{t("onecOrders:email")}:</span>
+          <b dir="auto" title={onec.clients[0].email}>
+            {onec.clients[0].email || "—"}
+          </b>
+        </div>
+      )}
       <div
         className="crm-detail-row"
         title="Регион телефонного номера, не место проживания клиента"
@@ -714,6 +827,7 @@ export function Inbox({ user }: { user: User }) {
         <span>Страна номера:</span>
         <b>{regionName(onec?.phone_country)}</b>
       </div>
+      {c && <CustomerFields c={c} />}
       <DetailField
         label={t("assignee")}
         value={
@@ -730,6 +844,25 @@ export function Inbox({ user }: { user: User }) {
           onChange={(value) => void change({ assignee_id: value })}
         />
       </DetailField>
+      {noteHint && c?.note_preview && (
+        <button
+          className="crm-note-touch-tip"
+          title="Закрыть подсказку"
+          onClick={() => setNoteHint(false)}
+        >
+          {c.note_preview} ×
+        </button>
+      )}
+      {c?.customer_id && (
+        <ProfileNote
+          key={c.customer_id}
+          id={c.customer_id}
+          admin={user.role === "admin"}
+          expanded={!!mobile}
+          openRequest={noteOpened}
+        />
+      )}
+      {mobile && <div className="crm-mobile-tools">{dialogTools}</div>}
       <section className="crm-onec" aria-label={t("onecCustomer")}>
         <div
           className="crm-detail-heading"
@@ -769,11 +902,9 @@ export function Inbox({ user }: { user: User }) {
         )}
         {onec && (
           <>
-            {!["matched", "not_found"].includes(onec.status) && (
+            {!["matched", "multiple", "not_found"].includes(onec.status) && (
               <p className="crm-muted" role="status">
-                {onec.status === "unverified"
-                  ? "Точное совпадение телефона не подтверждено"
-                  : t("onec_" + onec.status)}
+                {t("onec_" + onec.status)}
               </p>
             )}
             {onec.error && onec.status === "unavailable" && (
@@ -783,22 +914,14 @@ export function Inbox({ user }: { user: User }) {
                 })}
               </p>
             )}
-            {!!onec.candidates?.length && (
-              <details className="crm-onec-candidates">
-                <summary>
-                  Возможные совпадения · {onec.candidates.length}
-                </summary>
-                <small>
-                  Подсказки из 1С. Эти клиенты и заказы не привязаны к диалогу и
-                  не используются AI.
-                </small>
-                {onec.candidates.map((client, index) => (
-                  <OneCCustomerDetails key={index} client={client} compact />
-                ))}
-              </details>
-            )}
+            <OneCCandidates candidates={onec.candidates} compact />
             {onec.clients.map((client, index) => (
-              <OneCCustomerDetails key={index} client={client} compact />
+              <OneCCustomerDetails
+                key={index}
+                client={client}
+                compact
+                showEmail={false}
+              />
             ))}
             {onec.stale && <p className="crm-onec-stale">{t("onecStale")}</p>}
             {onec.checked_at && onec.status !== "not_found" && (
@@ -807,6 +930,13 @@ export function Inbox({ user }: { user: User }) {
               </small>
             )}
           </>
+        )}
+        {c?.customer_id && (
+          <Counterparties
+            key={c.customer_id}
+            id={c.customer_id}
+            write={canWrite}
+          />
         )}
       </section>
       <div className="crm-detail-heading">
@@ -882,6 +1012,8 @@ export function Inbox({ user }: { user: User }) {
   );
   return (
     <div
+      ref={columns.root}
+      style={columns.style}
       className={
         "crm-inbox " +
         (selected ? "has-selection " : "") +
@@ -889,10 +1021,12 @@ export function Inbox({ user }: { user: User }) {
       }
     >
       <aside className="crm-dialogs">
+        {columns.handle("list")}
         <div className="crm-toolbar">
           <TextInput
             aria-label={t("search")}
-            placeholder={t("search")}
+            placeholder={"Номер, " + t("search").toLowerCase()}
+            title={"Номер клиента, " + t("search").toLowerCase()}
             size="xs"
             value={search}
             onChange={(e) => setSearch(e.currentTarget.value)}
@@ -902,7 +1036,7 @@ export function Inbox({ user }: { user: User }) {
               <Button
                 size="xs"
                 variant={filter === "all" ? "subtle" : "light"}
-                title="Фильтр"
+                title={sort === "oldest" ? "Сначала старые" : "Фильтр"}
                 leftSection={<SlidersHorizontal size={13} />}
               >
                 {filter === "all"
@@ -911,26 +1045,65 @@ export function Inbox({ user }: { user: User }) {
                     ? "AI"
                     : t(filter)}{" "}
                 · {counters.data?.[filter] ?? 0}
+                {sort === "oldest" && " ↑"}
               </Button>
             </Menu.Target>
-            <Menu.Dropdown>
-              {["all", "waiting_us", "mine", "ai_draft", "closed"].map(
-                (f) => (
-                  <Menu.Item
-                    key={f}
-                    color={filter === f ? "teal" : undefined}
-                    rightSection={counters.data?.[f] ?? 0}
-                    onClick={() => {
-                      setFilter(f);
-                      localStorage.setItem(`crm-dialog-filter:${user.id}`, f);
-                      listAnchor.current = null;
-                      if (list.current) list.current.scrollTop = 0;
-                    }}
-                  >
-                    {f === "ai_draft" ? t("v1:aiDraft") : t(f)}
-                  </Menu.Item>
-                ),
-              )}
+            <Menu.Dropdown className="crm-filter-menu">
+              {["all", "waiting_us", "mine", "ai_draft", "closed"].map((f) => (
+                <Menu.Item
+                  key={f}
+                  color={filter === f ? "teal" : undefined}
+                  rightSection={`${counters.data?.[f] ?? 0}${filter === f ? " ✓" : ""}`}
+                  onClick={() => {
+                    setFilter(f);
+                    localStorage.setItem(`crm-dialog-filter:${user.id}`, f);
+                    listAnchor.current = null;
+                    if (list.current) list.current.scrollTop = 0;
+                  }}
+                >
+                  {f === "ai_draft" ? t("v1:aiDraft") : t(f)}
+                </Menu.Item>
+              ))}
+              <Menu.Divider />
+              {(["newest", "oldest"] as const).map((value) => (
+                <Menu.Item
+                  key={value}
+                  color={sort === value ? "teal" : undefined}
+                  rightSection={sort === value ? "✓" : undefined}
+                  onClick={() => {
+                    setSort(value);
+                    localStorage.setItem(`crm-dialog-sort:${user.id}`, value);
+                    listAnchor.current = null;
+                    if (list.current) list.current.scrollTop = 0;
+                  }}
+                >
+                  {value === "newest" ? "Сначала новые" : "Сначала старые"}
+                </Menu.Item>
+              ))}
+              <Menu.Divider />
+              <Menu.Label>Клиенты</Menu.Label>
+              {Object.entries({
+                all: "Все",
+                regular: "Постоянные",
+                partners: "Партнёры (B2B)",
+              }).map(([value, label]) => (
+                <Menu.Item
+                  key={value}
+                  color={group === value ? "teal" : undefined}
+                  rightSection={group === value ? "✓" : undefined}
+                  onClick={() => {
+                    setGroup(value);
+                    localStorage.setItem(
+                      `crm-customer-filter:${user.id}`,
+                      value,
+                    );
+                    listAnchor.current = null;
+                    if (list.current) list.current.scrollTop = 0;
+                  }}
+                >
+                  {label}
+                </Menu.Item>
+              ))}
             </Menu.Dropdown>
           </Menu>
           {canWrite && (
@@ -973,44 +1146,49 @@ export function Inbox({ user }: { user: User }) {
             <p className="crm-empty">{t("noDialogs")}</p>
           )}
           {dialogRows.map((item) => (
-            <button
-              disabled={busy}
-              key={item.id}
-              data-dialog-id={item.id}
-              className={`crm-dialog ${item.id === selected ? "selected" : ""} ${item.state}`}
-              onClick={() => choose(item.id)}
-              title={team.data?.find((u) => u.id === item.assignee_id)?.name}
-            >
-              <div className="crm-dialog-line">
-                <b>{item.display_name || item.name || item.phone}</b>
-                {item.last_has_attachment && (
-                  <Paperclip size={12} aria-label={t("attachment")} />
-                )}
-                <time title={time(item.updated_at)}>
-                  {shortTime(item.updated_at)}
-                </time>
-              </div>
-              <div className="crm-dialog-line">
-                <p>{item.last_message || " "}</p>
-                {item.has_ai_draft && (
-                  <Badge size="xs" color="violet" title={t("v1:aiDraft")}>
-                    AI
-                  </Badge>
-                )}
-                {item.task_updated && (
-                  <Badge
-                    size="xs"
-                    color="orange"
-                    title={taskLabel("taskUpdate")}
-                  >
-                    •
-                  </Badge>
-                )}
-                {item.unread_count > 0 && (
-                  <Badge size="xs">{item.unread_count}</Badge>
-                )}
-              </div>
-            </button>
+            <div className="crm-dialog-wrap" key={item.id}>
+              <button
+                disabled={busy}
+                data-dialog-id={item.id}
+                className={`crm-dialog ${item.id === selected ? "selected" : ""} ${item.state}`}
+                onClick={() => choose(item.id)}
+                title={team.data?.find((u) => u.id === item.assignee_id)?.name}
+              >
+                <CustomerAvatar c={item} />
+                <div className="crm-dialog-line">
+                  <b>{item.display_name || item.name || item.phone}</b>
+                  {item.last_has_attachment && (
+                    <Paperclip size={12} aria-label={t("attachment")} />
+                  )}
+                  <time title={time(item.updated_at)}>
+                    {shortTime(item.updated_at)}
+                  </time>
+                </div>
+                <div className="crm-dialog-line">
+                  <p>{item.last_message || " "}</p>
+                  {item.has_ai_draft && (
+                    <Badge size="xs" color="violet" title={t("v1:aiDraft")}>
+                      AI
+                    </Badge>
+                  )}
+                  {item.task_updated && (
+                    <Badge
+                      size="xs"
+                      color="orange"
+                      title={taskLabel("taskUpdate")}
+                    >
+                      •
+                    </Badge>
+                  )}
+                  {item.unread_count > 0 && (
+                    <Badge size="xs">{item.unread_count}</Badge>
+                  )}
+                </div>
+              </button>
+              <span className="crm-row-marks">
+                <CustomerMarks c={item} compact />
+              </span>
+            </div>
           ))}
           {conversations.isFetchingNextPage && (
             <div className="crm-list-loading" role="status">
@@ -1053,32 +1231,44 @@ export function Inbox({ user }: { user: User }) {
               >
                 ← {t("dialogs")}
               </Button>
+              {c && <CustomerAvatar c={c} />}
               <div>
-                <b>{displayName || t("loading")}</b>
+                <b title={displayName}>{displayName || t("loading")}</b>
                 <small>{c?.phone}</small>
+                <CustomerNumber value={c?.client_number} />
               </div>
+              {c && <CustomerMarks c={c} />}
               {c && <Badge variant="light">{t(c.state)}</Badge>}
-              {c?.customer_id && (
-                <TranslationPreferences
-                  key={c.id}
-                  customerId={c.customer_id}
-                  canWrite={canWrite}
-                  original={!!originals[c.id]}
-                  onOriginal={(value) =>
-                    setOriginals((p) => ({ ...p, [c.id]: value }))
-                  }
-                />
+              {c?.note_preview && (
+                <button
+                  className="crm-note-icon"
+                  title={c.note_preview}
+                  aria-label="Заметка о клиенте"
+                  onClick={() => {
+                    setNoteOpened((v) => v + 1);
+                    setNoteHint(window.matchMedia("(hover:none)").matches);
+                    openCard();
+                  }}
+                >
+                  <StickyNote size={15} />
+                </button>
               )}
-
+              {!mobile && dialogTools}
               <ActionIcon
                 variant="subtle"
                 aria-label={
-                  panelOpen ? "Свернуть карточку" : "Открыть карточку"
+                  !narrow && panelOpen
+                    ? "Свернуть карточку"
+                    : "Открыть карточку"
                 }
-                title={panelOpen ? "Свернуть карточку" : "Открыть карточку"}
+                title={
+                  !narrow && panelOpen
+                    ? "Свернуть карточку"
+                    : "Открыть карточку"
+                }
                 onClick={() => {
-                  if (window.innerWidth <= 760) {
-                    setCardOpen(true);
+                  if (narrow) {
+                    openCard();
                     return;
                   }
                   setPanelOpen(!panelOpen);
@@ -1088,7 +1278,7 @@ export function Inbox({ user }: { user: User }) {
                   );
                 }}
               >
-                {panelOpen ? (
+                {!narrow && panelOpen ? (
                   <PanelRightClose size={18} />
                 ) : (
                   <PanelRightOpen size={18} />
@@ -1213,6 +1403,7 @@ export function Inbox({ user }: { user: User }) {
                       (m.kind !== "vcard" || !m.content?.phones?.length) && (
                         <div className="crm-message-text">
                           <LinkedText
+                            customerLinks={m.is_private_note}
                             text={
                               m.direction === "out"
                                 ? (m.delivery_text ?? m.text)
@@ -1608,15 +1799,33 @@ export function Inbox({ user }: { user: User }) {
               <p className="crm-empty">{t("readOnly")}</p>
             )}
           </section>
-          {panelOpen && <aside className="crm-customer">{customerCard}</aside>}
-          <Modal
-            opened={cardOpen}
-            onClose={() => setCardOpen(false)}
+          {!narrow && panelOpen && (
+            <aside className="crm-customer">
+              {columns.handle("panel")}
+              {customerCard}
+            </aside>
+          )}
+          <Drawer
+            opened={!!narrow && cardOpen}
+            onClose={closeCard}
+            position="right"
+            styles={
+              mobile && keyboardHeight
+                ? {
+                    content: {
+                      height: keyboardHeight,
+                      maxHeight: keyboardHeight,
+                    },
+                  }
+                : undefined
+            }
+            size={mobile ? "100%" : 320}
             title={t("customer")}
-            centered
+            className="crm-client-drawer"
+            closeButtonProps={{ "aria-label": "Закрыть карточку" }}
           >
             {customerCard}
-          </Modal>
+          </Drawer>
         </>
       )}
       <Modal

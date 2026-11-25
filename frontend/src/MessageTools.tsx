@@ -1,3 +1,4 @@
+import { NumberLinks } from "./CustomerNumber";
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import {
@@ -47,12 +48,19 @@ export function languageName(code: string): string {
   }
 }
 
-export function LinkedText({ text }: { text: string }) {
+export function LinkedText({
+  text,
+  customerLinks,
+}: {
+  text: string;
+  customerLinks?: boolean;
+}) {
   const parts = text.split(/((?:https?:\/\/|www\.)[^\s<>]+)/giu);
   return (
     <>
       {parts.map((part, i) => {
-        if (!/^(?:https?:\/\/|www\.)/iu.test(part)) return part;
+        if (!/^(?:https?:\/\/|www\.)/iu.test(part))
+          return customerLinks ? <NumberLinks key={i} text={part} /> : part;
         const value = part.replace(/[.,!?;:)}\]»]+$/u, "");
         const suffix = part.slice(value.length);
         try {
@@ -234,9 +242,12 @@ export function TranslationPreferences({
           variant="subtle"
           title="Входящие: язык клиента → язык менеджера. Исходящие: язык менеджера → язык клиента."
         >
-          {enabled
-            ? `${clientLanguage ? languageName(clientLanguage) : "авто"} → ${languageName(ownLanguage)}`
-            : "Перевод: выкл"}
+          <span className="crm-translation-short">Перевод</span>
+          <span className="crm-translation-full">
+            {enabled
+              ? `${clientLanguage ? languageName(clientLanguage) : "авто"} → ${languageName(ownLanguage)}`
+              : "Перевод: выкл"}
+          </span>
         </Button>
       </Popover.Target>
       <Popover.Dropdown>

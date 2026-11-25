@@ -5,7 +5,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -243,6 +243,7 @@ class OutboundAcceptance(unittest.TestCase):
     def test_status_before_response_and_duplicate_echo(self):
         msg, _ = self.queue()
         external = uid()
+        provider_time = now().replace(second=0, microsecond=1000)
         with SessionLocal() as db:
             original = db.get(Message, msg["id"])
             db.add(DeliveryReceipt(external_id=external, status="read"))
@@ -255,6 +256,7 @@ class OutboundAcceptance(unittest.TestCase):
                     author_type="employee_phone",
                     body="Test reply",
                     status="delivered",
+                    provider_at=provider_time,
                 )
             )
             db.commit()
@@ -262,6 +264,8 @@ class OutboundAcceptance(unittest.TestCase):
         with SessionLocal() as db:
             row = db.get(Message, msg["id"])
             self.assertEqual(row.status, "read")
+            self.assertEqual(row.timeline_at, provider_time)
+            self.assertIsNotNone(row.sent_at)
             self.assertEqual(
                 db.scalar(
                     select(func.count())
@@ -270,6 +274,40 @@ class OutboundAcceptance(unittest.TestCase):
                 ),
                 1,
             )
+
+    def test_phone_reply_in_same_minute_follows_crm_send_across_pages(self):
+        msg, _ = self.queue()
+        external = uid()
+        self.deliver(msg["id"], {"messageId": external})
+        with SessionLocal() as db:
+            conv = db.get(Conversation, self.conversation_id)
+            base = {"channelId": conv.channel_id, "chatId": conv.chat_id, "type": "text"}
+            echo = dict(
+                base, messageId=external, status="delivered", isEcho=True,
+                dateTime="2026-01-05T11:29:00.001Z",
+            )
+            reply = dict(
+                base, messageId=uid(), status="inbound", text="Reply",
+                dateTime="2026-01-05T11:29:00.002Z",
+            )
+            # The echo can arrive after the reply. An edit or replay must not move it.
+            items = [reply, echo, dict(echo, isEdited=True, dateTime="2026-01-06T10:00:00Z")]
+            events = [WebhookEvent(payload={"messages": [item]}) for item in items]
+            db.add_all(events)
+            db.commit()
+            event_ids = [e.id for e in events]
+        for event_id in event_ids:
+            asyncio.run(process_webhook(self.context, event_id))
+        url = f"/api/conversations/{self.conversation_id}/messages"
+        messages = self.client.get(url).json()
+        self.assertEqual([m["text"] for m in messages], ["Test reply", "Reply"])
+        self.assertEqual(
+            datetime.fromisoformat(messages[0]["created_at"]),
+            datetime(2026, 1, 5, 11, 29, 0, 1000, tzinfo=timezone.utc),
+        )
+        previous = self.client.get(url, params={"before": messages[1]["id"]}).json()
+        self.assertEqual([m["id"] for m in previous], [msg["id"]])
+        self.assertEqual(self.client.get(url, params={"before": msg["id"]}).json(), [])
 
     def test_network_retry_stays_inside_window_then_requires_confirmation(self):
         msg, _ = self.queue()

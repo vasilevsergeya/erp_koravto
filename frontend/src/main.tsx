@@ -707,7 +707,12 @@ function Workspace({
               "notification-deliveries",
             ])
               void query.invalidateQueries({ queryKey: [key] });
-            for (const key of ["customers", "customer"])
+            for (const key of [
+              "customers",
+              "customer",
+              "profile-note",
+              "counterparties",
+            ])
               void query.invalidateQueries({ queryKey: [key] });
             if (
               payload.type === "tasks.changed" ||
@@ -815,6 +820,7 @@ function Workspace({
       window.removeEventListener("popstate", pop);
     };
   }, []);
+  const [mobileTools, setMobileTools] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(
     () => localStorage.getItem(`crm-navigation:${user.id}`) === "collapsed",
   );
@@ -844,6 +850,14 @@ function Workspace({
     >
       <aside className="sidebar">
         <Brand />
+        <button
+          className="crm-mobile-status"
+          aria-expanded={mobileTools}
+          title="Уведомления и состояние"
+          onClick={() => setMobileTools(!mobileTools)}
+        >
+          •••
+        </button>
         <button
           className="nav-collapse"
           title={navCollapsed ? "Развернуть меню" : "Свернуть меню"}
@@ -922,7 +936,7 @@ function Workspace({
         </div>
       </aside>
       <main className="main">
-        <header className="topbar">
+        <header className={"topbar" + (mobileTools ? " mobile-open" : "")}>
           <span className="timezone">
             SEOUL ·{" "}
             {new Intl.DateTimeFormat("ru", {

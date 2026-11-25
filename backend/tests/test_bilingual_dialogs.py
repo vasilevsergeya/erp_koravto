@@ -207,6 +207,17 @@ class BilingualAcceptance(unittest.TestCase):
                 ("طلبك جاهز", "Ваш заказ готов", "ar", "ru"),
             )
 
+    def test_summary_language_is_personal_and_survives_a_new_session(self):
+        path = "/api/me/summary-language"
+        self.assertIsNone(self.client.get(path).json()["language"])
+        for client, language in [(self.client, "de"), (self.other_client, "ko"), (self.client, "fr")]:
+            saved = client.put(path, json={"language": language})
+            self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(self.client.put(path, json={"language": "invalid"}).status_code, 422)
+        self.assertEqual(self.session(self.user).get(path).json()["language"], "fr")
+        self.assertEqual(self.other_client.get(path).json()["language"], "ko")
+        self.assertEqual(self.client.get("/api/me/language").json()["language"], "ru")
+
     def test_edited_ai_translates_final_manager_text_once_and_preserves_both(self):
         with patch(
             "app.services.translations.translate_text", AsyncMock(return_value="Pedido enviado")
@@ -314,7 +325,7 @@ class BilingualAcceptance(unittest.TestCase):
             self.assertEqual(db.get(Message, second).status, "queued")
             self.assertEqual(db.get(Message, second).delivery_body, "Segundo")
 
-    def test_suffix_candidate_is_not_identity_or_ai_order(self):
+    def test_ambiguous_candidates_are_not_identity_or_ai_orders(self):
         with SessionLocal() as db:
             for key, value in [
                 ("base_url", "http://onec.invalid/prod"),
@@ -330,19 +341,21 @@ class BilingualAcceptance(unittest.TestCase):
             "realizations": ["OTHER-ORDER"],
             "matched_phone": "+442079550123",
         }
+        candidates = [candidate, {"name": "Second customer", "realizations": ["SECOND-ORDER"]}]
         with patch(
-            "app.services.onec_customers.OneCAdapter.customers", AsyncMock(return_value=[candidate])
+            "app.services.onec_customers.OneCAdapter.customers", AsyncMock(return_value=candidates)
         ):
             snap = asyncio.run(refresh_customer(self.cid))
         self.assertEqual(snap["clients"], [])
-        self.assertEqual(snap["candidates"], [candidate])
+        self.assertEqual(snap["candidates"], candidates)
         self.assertEqual(snap["phone_country"], "US")
-        self.assertEqual(snap["status"], "unverified")
+        self.assertEqual(snap["status"], "multiple")
         c = self.client.get(f"/api/conversations/{self.cid}").json()
         self.assertNotEqual(c["display_name"], "Wrong customer")
         with SessionLocal() as db:
             context = context_snapshot(db, db.get(Conversation, self.cid), AIConfig())
             self.assertNotIn("OTHER-ORDER", context["orders"])
+            self.assertNotIn("SECOND-ORDER", context["orders"])
 
     def test_bell_excludes_old_inbound_and_read_all_is_scoped(self):
         with SessionLocal() as db:

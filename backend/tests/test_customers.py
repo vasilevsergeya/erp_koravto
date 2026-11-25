@@ -131,6 +131,116 @@ class CustomersAcceptance(unittest.TestCase):
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()
 
+    def test_shared_number_alias_and_note_conflict(self):
+        first, owner = self.chat("+12025550909")
+        second, same = self.chat("+12025550909")
+        self.assertEqual(same, owner)
+        dest, _ = self.create()
+        number = self.get(owner)["client_number"]
+        suffix = str(int(number[2:]))
+        dest_number = dest["client_number"]
+        self.client.patch("/api/conversations/" + first, json={"state": "closed"})
+        for q in (number, "c" + suffix, "С-" + suffix):
+            rows = self.client.get(
+                "/api/conversations", params={"q": q, "state": "closed", "group": "partners"}
+            ).json()
+            self.assertEqual({r["id"] for r in rows}, {first, second})
+        path = "/api/customers/" + owner + "/profile-note"
+        one = self.client.put(path, json={"version": 0, "text": "Проверять упаковку"})
+        self.assertEqual(one.status_code, 200)
+        stale = self.staff_client.put(path, json={"version": 0, "text": "Другая версия"})
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(self.staff_client.get(path).json()["text"], "Проверять упаковку")
+        self.assertEqual(self.staff_client.get(path + "/history").status_code, 403)
+        self.assertEqual(len(self.client.get(path + "/history").json()), 1)
+        for cid in (first, second):
+            self.assertEqual(
+                self.client.get("/api/conversations/" + cid).json()["note_preview"],
+                "Проверять упаковку",
+            )
+            self.assertEqual(self.client.get("/api/conversations/" + cid + "/messages").json(), [])
+        self.assertEqual(
+            self.staff_client.put(
+                "/api/customers/" + owner + "/type", json={"customer_type": "partner"}
+            ).status_code,
+            200,
+        )
+        merged = self.client.post(
+            "/api/customers/" + owner + "/merge",
+            json={
+                "version": self.get(owner)["version"],
+                "into_id": dest["id"],
+                "into_version": dest["version"],
+                "confirm": True,
+            },
+        )
+        self.assertEqual(merged.status_code, 200, merged.text)
+        self.assertEqual(merged.json()["client_number"], number)
+        self.assertEqual(merged.json()["customer_type"], "partner")
+        self.assertEqual(
+            {
+                r["customer_id"]
+                for r in self.client.get("/api/conversations", params={"q": dest_number}).json()
+            },
+            {dest["id"]},
+        )
+
+    def test_waiting_queue_sort_before_pagination(self):
+        channel = uid()
+        start = now() - timedelta(days=4)
+        ids = []
+        with SessionLocal() as db:
+            for i in range(53):
+                c = Conversation(
+                    channel_id=channel,
+                    chat_id=str(i),
+                    state="waiting_us",
+                    inbound_seq=2,
+                    answered_seq=1,
+                )
+                db.add(c)
+                db.flush()
+                ids.append(c.id)
+                for seq, minutes in [(1, 200 - i), (2, i)]:
+                    db.add(
+                        Message(
+                            conversation_id=c.id,
+                            channel_id=channel,
+                            external_id=uid(),
+                            direction="in",
+                            author_type="customer",
+                            inbound_seq=seq,
+                            created_at=start + timedelta(minutes=minutes),
+                        )
+                    )
+                db.add(
+                    Message(
+                        conversation_id=c.id,
+                        channel_id=channel,
+                        external_id=uid(),
+                        direction="note",
+                        author_type="user",
+                        is_private_note=True,
+                        created_at=start + timedelta(days=10, minutes=i),
+                    )
+                )
+            db.commit()
+        for state, sort, expected in [
+            ("waiting_us", "oldest", ids),
+            ("waiting_us", "newest", ids[::-1]),
+            ("", "newest", ids),
+            ("", "oldest", ids[::-1]),
+        ]:
+            pages = []
+            for offset in (0, 50):
+                resp = self.client.get(
+                    "/api/conversations",
+                    params={"channel": channel, "state": state, "sort": sort, "offset": offset},
+                )
+                self.assertEqual(resp.status_code, 200)
+                pages.extend(r["id"] for r in resp.json())
+            self.assertEqual(pages, expected)
+
     def test_identity_resolution_cross_channel_never_by_name_or_invalid_number(self):
         first, customer = self.chat("+12025550111")
         second, same = self.chat("+12025550111")
@@ -449,6 +559,37 @@ class CustomersAcceptance(unittest.TestCase):
             self.assertIsNotNone(connection.scalar(text("SELECT customer_id FROM tasks")))
             self.assertEqual(
                 connection.scalar(text("SELECT name FROM conversations WHERE id='b'")), "Other"
+            )
+            connection.execute(
+                text("""CREATE TABLE messages(conversation_id varchar(36), direction text,
+                created_at timestamptz,sent_at timestamptz,is_private_note boolean,author_type text)""")
+            )
+            connection.execute(
+                text("""INSERT INTO messages VALUES
+                ('a','in','2026-02-10',null,false,'customer'),
+                ('b','in','2025-10-01',null,false,'customer'),
+                ('c','in','2025-09-15',null,false,'customer'),
+                ('a','note','2024-01-01',null,true,'user')""")
+            )
+            numbering = importlib.import_module("app.migrations.versions.0013_customer_numbers")
+            with Operations.context(context):
+                numbering.upgrade()
+            self.assertEqual(
+                connection.execute(
+                    text("""SELECT c.id,n.number FROM conversations c
+                JOIN customer_numbers n USING(customer_id) ORDER BY c.id""")
+                ).all(),
+                [("a", 2), ("b", 2), ("c", 1)],
+            )
+            connection.execute(
+                text("""INSERT INTO customers SELECT
+                (jsonb_populate_record(c, '{"id":"new-customer"}')).* FROM customers c LIMIT 1""")
+            )
+            self.assertEqual(
+                connection.scalar(
+                    text("SELECT number FROM customer_numbers WHERE customer_id='new-customer'")
+                ),
+                3,
             )
             connection.execute(text("SET LOCAL search_path TO public"))
             connection.execute(text("DROP SCHEMA " + schema + " CASCADE"))
