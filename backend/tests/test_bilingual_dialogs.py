@@ -325,7 +325,7 @@ class BilingualAcceptance(unittest.TestCase):
             self.assertEqual(db.get(Message, second).status, "queued")
             self.assertEqual(db.get(Message, second).delivery_body, "Segundo")
 
-    def test_suffix_candidate_is_not_identity_or_ai_order(self):
+    def test_ambiguous_candidates_are_not_identity_or_ai_orders(self):
         with SessionLocal() as db:
             for key, value in [
                 ("base_url", "http://onec.invalid/prod"),
@@ -341,19 +341,21 @@ class BilingualAcceptance(unittest.TestCase):
             "realizations": ["OTHER-ORDER"],
             "matched_phone": "+442079550123",
         }
+        candidates = [candidate, {"name": "Second customer", "realizations": ["SECOND-ORDER"]}]
         with patch(
-            "app.services.onec_customers.OneCAdapter.customers", AsyncMock(return_value=[candidate])
+            "app.services.onec_customers.OneCAdapter.customers", AsyncMock(return_value=candidates)
         ):
             snap = asyncio.run(refresh_customer(self.cid))
         self.assertEqual(snap["clients"], [])
-        self.assertEqual(snap["candidates"], [candidate])
+        self.assertEqual(snap["candidates"], candidates)
         self.assertEqual(snap["phone_country"], "US")
-        self.assertEqual(snap["status"], "unverified")
+        self.assertEqual(snap["status"], "multiple")
         c = self.client.get(f"/api/conversations/{self.cid}").json()
         self.assertNotEqual(c["display_name"], "Wrong customer")
         with SessionLocal() as db:
             context = context_snapshot(db, db.get(Conversation, self.cid), AIConfig())
             self.assertNotIn("OTHER-ORDER", context["orders"])
+            self.assertNotIn("SECOND-ORDER", context["orders"])
 
     def test_bell_excludes_old_inbound_and_read_all_is_scoped(self):
         with SessionLocal() as db:
