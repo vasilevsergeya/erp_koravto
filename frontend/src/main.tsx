@@ -40,6 +40,7 @@ import {
 import "@mantine/core/styles.css";
 import "./i18n";
 import "./style.css";
+import { GmailSettings } from "./GmailSettings";
 import { MailPage } from "./Mail";
 import { Inbox } from "./Inbox";
 import "./inbox-i18n";
@@ -492,34 +493,7 @@ function SettingsPage() {
           ))}
         </div>
       </section>
-      <section className="surface settings-card" id="gmail">
-        <div className="card-heading">
-          <span className="integration-icon">
-            <Mail />
-          </span>
-          <div>
-            <h3>Почта Gmail</h3>
-            <p>Для чтения писем используйте OAuth с правом gmail.readonly.</p>
-          </div>
-        </div>
-        <p className="muted">
-          Для пробного подключения вставьте access token. Для постоянного
-          подключения вставьте JSON с полями client_id, client_secret и
-          refresh_token.
-        </p>
-        {settings.data
-          ?.filter((s) => s.key === "gmail.credentials")
-          .map((s) => (
-            <SettingField
-              key={s.key}
-              item={s}
-              onSaved={() => {
-                query.removeQueries({ queryKey: ["mail"] });
-                refresh();
-              }}
-            />
-          ))}
-      </section>
+      <GmailSettings />
       <section className="surface settings-card" id="parts-pricing">
         <h3>{t("partsPricing")}</h3>
         <p className="muted">{t("partsPricingHint")}</p>
