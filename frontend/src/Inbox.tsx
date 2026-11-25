@@ -12,6 +12,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -205,27 +206,12 @@ export function Inbox({ user }: { user: User }) {
     return saved === null ? window.innerWidth >= 1100 : saved === "true";
   });
   const list = useRef<HTMLDivElement>(null);
-  const listAnchor = useRef<{ id: string; top: number } | null>(null);
+  const listEnd = useRef<HTMLDivElement>(null);
   const initialScroll = useRef<string | null>(null);
   const stickToBottom = useRef(true);
   const loadingOlder = useRef(false);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
-  function captureListAnchor() {
-    const el = list.current;
-    if (!el || el.scrollTop < 4) {
-      listAnchor.current = null;
-      return;
-    }
-    const row = Array.from(
-      el.querySelectorAll<HTMLElement>("[data-dialog-id]"),
-    ).find((row) => row.offsetTop + row.offsetHeight > el.scrollTop);
-    if (row)
-      listAnchor.current = {
-        id: row.dataset.dialogId!,
-        top: row.offsetTop - el.scrollTop,
-      };
-  }
   const [search, setSearch] = useState(
     () => new URLSearchParams(location.search).get("client") || "",
   );
@@ -344,11 +330,7 @@ export function Inbox({ user }: { user: User }) {
     sendLanguage,
   ]);
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setSearchQuery(search);
-      listAnchor.current = null;
-      if (list.current) list.current.scrollTop = 0;
-    }, 250);
+    const timer = setTimeout(() => setSearchQuery(search), 250);
     return () => clearTimeout(timer);
   }, [search]);
   const params = new URLSearchParams({
@@ -360,31 +342,87 @@ export function Inbox({ user }: { user: User }) {
     params.set("state", filter);
   if (filter === "mine") params.set("assignee", "me");
   if (filter === "ai_draft") params.set("ai_draft", "true");
+  const listKey = params.toString();
   const conversations = useInfiniteQuery({
-    queryKey: ["conversations", params.toString()],
+    queryKey: ["conversations", listKey],
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
       api<Conversation[]>(
-        "/api/conversations?" + params + "&offset=" + pageParam,
+        "/api/conversations?" + listKey + "&offset=" + pageParam,
       ),
     getNextPageParam: (last, pages) =>
       last.length === 50 ? pages.length * 50 : undefined,
     refetchInterval: 5000,
   });
-  const dialogRows = Array.from(
-    new Map(
-      (conversations.data?.pages.flat() || []).map((c) => [c.id, c]),
-    ).values(),
+  const dialogRows = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          (conversations.data?.pages.flat() || []).map((c) => [c.id, c]),
+        ).values(),
+      ),
+    [conversations.data],
   );
+  const previousList = useRef({ key: listKey, rows: dialogRows });
   useLayoutEffect(() => {
-    const el = list.current,
-      anchor = listAnchor.current;
-    if (!el || !anchor) return;
-    const row = Array.from(
-      el.querySelectorAll<HTMLElement>("[data-dialog-id]"),
-    ).find((row) => row.dataset.dialogId === anchor.id);
-    if (row) el.scrollTop = row.offsetTop - anchor.top;
-  }, [conversations.data]);
+    const previous = previousList.current;
+    previousList.current = { key: listKey, rows: dialogRows };
+    const el = list.current;
+    if (!el) return;
+    if (previous.key !== listKey) {
+      el.scrollTop = 0;
+      return;
+    }
+    // All dialog wrappers have the same height. Appending a page leaves the
+    // existing rows in place, even if the user kept scrolling during the fetch.
+    const height =
+      el.querySelector<HTMLElement>(".crm-dialog-wrap")?.offsetHeight;
+    if (!height || el.scrollTop <= 0) return;
+    const first = Math.floor(el.scrollTop / height);
+    if (previous.rows[first]?.id === dialogRows[first]?.id) return;
+
+    // A live update can move a visible dialog to the top. Anchor on the
+    // visible row that moved least, retaining its offset within the viewport.
+    const positions = new Map(dialogRows.map((row, index) => [row.id, index]));
+    const end = Math.min(
+      previous.rows.length,
+      Math.ceil((el.scrollTop + el.clientHeight) / height),
+    );
+    let shift: number | undefined;
+    for (let i = first; i < end; i++) {
+      const index = positions.get(previous.rows[i].id);
+      if (
+        index !== undefined &&
+        (shift === undefined || Math.abs(index - i) < Math.abs(shift))
+      )
+        shift = index - i;
+    }
+    if (shift) el.scrollTop += shift * height;
+  }, [listKey, dialogRows]);
+
+  const { hasNextPage, isFetching, isError, fetchNextPage } = conversations;
+  useEffect(() => {
+    const root = list.current,
+      tail = listEnd.current;
+    if (!root || !tail || !hasNextPage || isFetching || isError) return;
+    // Observing again after a refresh also checks a stationary scrollbar.
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && root.clientHeight > 0)
+          void fetchNextPage({ cancelRefetch: false });
+      },
+      { root, rootMargin: "0px 0px 520px 0px" },
+    );
+    observer.observe(tail);
+    return () => observer.disconnect();
+  }, [
+    listKey,
+    hasNextPage,
+    isFetching,
+    isError,
+    fetchNextPage,
+    conversations.data,
+  ]);
   const counters = useQuery({
     queryKey: ["conversation-counts", user.id, group],
     queryFn: () =>
@@ -1057,8 +1095,6 @@ export function Inbox({ user }: { user: User }) {
                   onClick={() => {
                     setFilter(f);
                     localStorage.setItem(`crm-dialog-filter:${user.id}`, f);
-                    listAnchor.current = null;
-                    if (list.current) list.current.scrollTop = 0;
                   }}
                 >
                   {f === "ai_draft" ? t("v1:aiDraft") : t(f)}
@@ -1073,8 +1109,6 @@ export function Inbox({ user }: { user: User }) {
                   onClick={() => {
                     setSort(value);
                     localStorage.setItem(`crm-dialog-sort:${user.id}`, value);
-                    listAnchor.current = null;
-                    if (list.current) list.current.scrollTop = 0;
                   }}
                 >
                   {value === "newest" ? "Сначала новые" : "Сначала старые"}
@@ -1097,8 +1131,6 @@ export function Inbox({ user }: { user: User }) {
                       `crm-customer-filter:${user.id}`,
                       value,
                     );
-                    listAnchor.current = null;
-                    if (list.current) list.current.scrollTop = 0;
                   }}
                 >
                   {label}
@@ -1120,7 +1152,7 @@ export function Inbox({ user }: { user: User }) {
           )}
         </div>
         {conversations.isLoading && <Loader size="sm" m="md" />}
-        {conversations.error && (
+        {conversations.error && !conversations.isFetchNextPageError && (
           <Alert color="red">
             {errorText(conversations.error)}
             <Button size="xs" onClick={() => void conversations.refetch()}>
@@ -1128,20 +1160,7 @@ export function Inbox({ user }: { user: User }) {
             </Button>
           </Alert>
         )}
-        <div
-          className="crm-dialog-list"
-          ref={list}
-          onScroll={(e) => {
-            captureListAnchor();
-            const el = e.currentTarget;
-            if (
-              el.scrollHeight - el.scrollTop - el.clientHeight < 520 &&
-              conversations.hasNextPage &&
-              !conversations.isFetching
-            )
-              void conversations.fetchNextPage();
-          }}
-        >
+        <div className="crm-dialog-list" ref={list}>
           {!dialogRows.length && !conversations.isLoading && (
             <p className="crm-empty">{t("noDialogs")}</p>
           )}
@@ -1190,6 +1209,20 @@ export function Inbox({ user }: { user: User }) {
               </span>
             </div>
           ))}
+          {hasNextPage && (
+            <div className="crm-list-end" ref={listEnd} aria-hidden="true" />
+          )}
+          {conversations.isFetchNextPageError && (
+            <Alert color="red">
+              {errorText(conversations.error)}
+              <Button
+                size="xs"
+                onClick={() => void fetchNextPage({ cancelRefetch: false })}
+              >
+                {t("retry")}
+              </Button>
+            </Alert>
+          )}
           {conversations.isFetchingNextPage && (
             <div className="crm-list-loading" role="status">
               <Loader size="xs" />

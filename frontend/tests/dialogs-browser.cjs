@@ -349,18 +349,104 @@ const { chromium } = require("playwright"),
       .locator(".crm-composer")
       .evaluate((el) => el.getBoundingClientRect().height)) <= 100,
   );
-  for (const count of [100, 142]) {
-    await page
-      .locator(".crm-dialog-list")
-      .evaluate((el) => (el.scrollTop = el.scrollHeight));
-    await page.waitForFunction(
-      (expected) =>
-        document.querySelectorAll("[data-dialog-id]").length >= expected,
+  const list = page.locator(".crm-dialog-list");
+  const topDialog = (el) => {
+    const { top, left } = el.getBoundingClientRect();
+    const row = document
+      .elementFromPoint(left + el.clientWidth / 2, top + 1)
+      .closest("[data-dialog-id]");
+    return [row.dataset.dialogId, row.getBoundingClientRect().top - top];
+  };
+  const waitForRows = (count) =>
+    page.waitForFunction(
+      (n) => document.querySelectorAll("[data-dialog-id]").length === n,
       count,
+      { timeout: 10000 },
     );
-  }
-  assert.equal(await page.locator("[data-dialog-id]").count(), 142);
-  await page.locator(".crm-dialog-list").evaluate((el) => (el.scrollTop = 0));
+  // Scroll past a partially visible first row before reaching the next page.
+  await list.evaluate(
+    (el) =>
+      new Promise((resolve) => {
+        el.addEventListener("scroll", () => resolve(), { once: true });
+        el.scrollTop = 20;
+      }),
+  );
+  const scrollNearEnd = () =>
+    list.evaluate((el) => {
+      el.scrollTop = el.scrollHeight - el.clientHeight - 137;
+    });
+  const pageAt = (offset) => (url) =>
+    url.pathname === "/api/conversations" &&
+    Number(url.searchParams.get("offset")) === offset;
+  const holdOffset = async (offset) => {
+    const started = page.waitForRequest((request) =>
+      pageAt(offset)(new URL(request.url())),
+    );
+    const release = Promise.withResolvers();
+    await page.route(
+      pageAt(offset),
+      async (route) => {
+        await release.promise;
+        await route.fallback();
+      },
+      { times: 1 },
+    );
+    return { started, release: release.resolve };
+  };
+  const nextPage = await holdOffset(50);
+  await scrollNearEnd();
+  await nextPage.started;
+  // Keep moving while the response is in flight.
+  await list.evaluate((el) => {
+    el.scrollTop += 67;
+  });
+  const onFirstPage = await list.evaluate(topDialog);
+  nextPage.release();
+  await waitForRows(100);
+  assert.deepEqual(await list.evaluate(topDialog), onFirstPage);
+
+  // Reach the next boundary during a background refresh. No further scroll
+  // event is sent after the refresh completes.
+  const refresh = await holdOffset(0);
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+  await refresh.started;
+  await scrollNearEnd();
+  const onSecondPage = await list.evaluate(topDialog);
+  refresh.release();
+  await waitForRows(142);
+  assert.deepEqual(await list.evaluate(topDialog), onSecondPage);
+  // A new message moves a different dialog ahead of the visible rows.
+  const moved = dialogs.pop();
+  dialogs.unshift(moved);
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+  await page.waitForFunction(
+    (id) => document.querySelector("[data-dialog-id]").dataset.dialogId === id,
+    moved.id,
+  );
+  assert.deepEqual(await list.evaluate(topDialog), onSecondPage);
+  dialogs.push(dialogs.shift());
+
+  // A new search starts at the top. Retrying a failed page keeps its offset.
+  const search = page.locator(".crm-toolbar input");
+  await search.fill("Клиент");
+  await waitForRows(50);
+  assert.equal(await list.evaluate((el) => el.scrollTop), 0);
+  await page.route(
+    pageAt(50),
+    (route) =>
+      route.fulfill({ status: 503, json: { detail: "Ошибка подгрузки" } }),
+    { times: 2 },
+  );
+  await scrollNearEnd();
+  await list.getByRole("button", { name: "Повторить" }).click();
+  await waitForRows(100);
+  await search.fill("");
+  await waitForRows(142);
+  assert.equal(await list.evaluate((el) => el.scrollTop), 0);
   const output =
     process.env.CRM_TEST_OUTPUT ||
     require("node:path").resolve(__dirname, "../../docs/reports");
