@@ -34,11 +34,15 @@ i18n.addResourceBundle("ru","translation",{preferences:"Мои уведомле�
 i18n.addResourceBundle("en","translation",{preferences:"My notifications",preferencesHint:"Channels and delivery history",aiReport:"AI report",aiReportHint:"Decisions and usage", "smtp.security":"SMTP encryption: starttls or ssl", "telegram.bot_token":"Telegram bot token"},true,true);
 
 i18n.addResourceBundle("ru", "translation", {
+  mail: "Почта",
+  "gmail.credentials": "Токен Gmail",
   partsPricing: "Ценообразование",
   partsPricingHint: "W — цена одной детали в вонах. Помощник использует эту формулу для Hyundai, Kia и Renault. Цена продажи округляется до центов.",
   "pricing.mobis_usd_formula": "Формула цены продажи в USD",
 }, true, true);
 i18n.addResourceBundle("en", "translation", {
+  mail: "Mail",
+  "gmail.credentials": "Gmail token",
   partsPricing: "Pricing",
   partsPricingHint: "W is the unit price in KRW. The assistant uses this formula for Hyundai, Kia and Renault. The sale price is rounded to cents.",
   "pricing.mobis_usd_formula": "USD sale price formula",

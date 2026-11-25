@@ -21,6 +21,7 @@ import {
 import { useTranslation } from "react-i18next";
 import {
   MessageSquare,
+  Mail,
   LayoutDashboard,
   Settings,
   LogOut,
@@ -39,6 +40,7 @@ import {
 import "@mantine/core/styles.css";
 import "./i18n";
 import "./style.css";
+import { MailPage } from "./Mail";
 import { Inbox } from "./Inbox";
 import "./inbox-i18n";
 import { TasksPage, TaskDialogs, NotificationBell } from "./Tasks";
@@ -332,6 +334,10 @@ type CheckResult = {
 function SettingsPage() {
   const { t } = useTranslation();
   const query = useQueryClient();
+  useEffect(() => {
+    if (location.pathname === "/settings/gmail")
+      document.getElementById("gmail")?.scrollIntoView();
+  }, []);
   const settings = useQuery({
     queryKey: ["settings"],
     queryFn: () => api<Setting[]>("/api/settings"),
@@ -486,6 +492,34 @@ function SettingsPage() {
           ))}
         </div>
       </section>
+      <section className="surface settings-card" id="gmail">
+        <div className="card-heading">
+          <span className="integration-icon">
+            <Mail />
+          </span>
+          <div>
+            <h3>Почта Gmail</h3>
+            <p>Для чтения писем используйте OAuth с правом gmail.readonly.</p>
+          </div>
+        </div>
+        <p className="muted">
+          Для пробного подключения вставьте access token. Для постоянного
+          подключения вставьте JSON с полями client_id, client_secret и
+          refresh_token.
+        </p>
+        {settings.data
+          ?.filter((s) => s.key === "gmail.credentials")
+          .map((s) => (
+            <SettingField
+              key={s.key}
+              item={s}
+              onSaved={() => {
+                query.removeQueries({ queryKey: ["mail"] });
+                refresh();
+              }}
+            />
+          ))}
+      </section>
       <section className="surface settings-card" id="parts-pricing">
         <h3>{t("partsPricing")}</h3>
         <p className="muted">{t("partsPricingHint")}</p>
@@ -618,6 +652,14 @@ function ProfileSettings({
   );
 }
 
+function workspacePage() {
+  if (location.pathname === "/mail") return "mail";
+  if (location.pathname === "/settings/gmail") return "settings";
+  if (location.pathname.startsWith("/customers")) return "customers";
+  if (location.pathname.startsWith("/tasks/")) return "boards";
+  return "inbox";
+}
+
 function Workspace({
   user,
   onLogout,
@@ -628,13 +670,7 @@ function Workspace({
   onUser: (value: User) => void;
 }) {
   const { t } = useTranslation();
-  const [page, setPage] = useState(
-    location.pathname.startsWith("/customers")
-      ? "customers"
-      : location.pathname.startsWith("/tasks/")
-        ? "boards"
-        : "inbox",
-  );
+  const [page, setPage] = useState(workspacePage);
   const integration = useQuery({
     queryKey: ["integration-health"],
     queryFn: () =>
@@ -801,14 +837,7 @@ function Workspace({
   useEffect(() => {
     const show = () => setPage("inbox");
     const customer = () => setPage("customers");
-    const pop = () =>
-      setPage(
-        location.pathname.startsWith("/customers")
-          ? "customers"
-          : location.pathname.startsWith("/tasks/")
-            ? "boards"
-            : "inbox",
-      );
+    const pop = () => setPage(workspacePage());
     window.addEventListener("crm:conversation", show);
     window.addEventListener("crm:new-conversation", show);
     window.addEventListener("crm:customer", customer);
@@ -826,6 +855,7 @@ function Workspace({
   );
   const pages = [
     { id: "inbox", icon: MessageSquare },
+    { id: "mail", icon: Mail },
     { id: "boards", icon: LayoutDashboard },
     { id: "customers", icon: Users },
     { id: "preferences", icon: Bell },
@@ -844,7 +874,7 @@ function Workspace({
     <div
       className={
         "workspace " +
-        (page === "inbox" ? "workspace-inbox " : "") +
+        (page === "inbox" || page === "mail" ? "workspace-inbox " : "") +
         (navCollapsed ? "navigation-collapsed" : "")
       }
     >
@@ -897,7 +927,11 @@ function Workspace({
                 history.pushState(
                   {},
                   "",
-                  p.id === "customers" ? "/customers" : "/",
+                  p.id === "mail"
+                    ? "/mail"
+                    : p.id === "customers"
+                      ? "/customers"
+                      : "/",
                 );
                 setPage(p.id);
               }}
@@ -986,13 +1020,21 @@ function Workspace({
           </Popover>
         </header>
         <div className="page-body">
-          {page !== "inbox" && (
+          {page !== "inbox" && page !== "mail" && (
             <div className="page-heading">
               <h1>{t(page)}</h1>
             </div>
           )}
           {page === "inbox" ? (
             <Inbox user={user} />
+          ) : page === "mail" ? (
+            <MailPage
+              admin={user.role === "admin"}
+              openSettings={() => {
+                history.pushState({}, "", "/settings/gmail");
+                setPage("settings");
+              }}
+            />
           ) : page === "boards" ? (
             <TasksPage user={user} />
           ) : page === "customers" ? (

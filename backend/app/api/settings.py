@@ -17,6 +17,7 @@ from app.core.settings import (
     put_setting,
 )
 from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
+from app.integrations.gmail import GmailError, credentials
 from app.integrations.onec import OneCError, customer_endpoint
 from app.models import AuditEvent, User, WebhookEvent
 from app.services.parts_pricing import FORMULA_KEY, SaleFormula
@@ -49,6 +50,12 @@ def update_setting(
         raise HTTPException(400, "Укажите целое число от 1 до 65535")
     if kind == "string" and (not isinstance(body.value, str) or len(body.value) > 8192):
         raise HTTPException(400, "Некорректное значение")
+    if key == "gmail.credentials" and body.value:
+        body.value = str(body.value).strip()
+        try:
+            credentials(body.value)
+        except GmailError:
+            raise HTTPException(400, "Укажите OAuth access token или JSON с refresh_token, client_id и client_secret.") from None
     if key == "smtp.security" and body.value not in ("starttls", "ssl"):
         raise HTTPException(400, "Выберите starttls или ssl")
     if key in ("smtp.host", "smtp.username", "smtp.from_email") and any(
