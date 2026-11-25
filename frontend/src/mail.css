@@ -150,6 +150,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.mail-row-address,
 .mail-row strong,
 .mail-snippet {
   display: block;
@@ -177,8 +178,7 @@
 .mail-row-meta time,
 .mail-letter-heading time,
 .mail-subject small,
-.mail-addresses,
-.mail-day {
+.mail-addresses {
   font-size: 11px;
   color: #647870;
 }
@@ -203,18 +203,33 @@
   overflow-wrap: anywhere;
 }
 .mail-letters {
+  overflow-anchor: none;
   flex: 1;
   padding: 8px clamp(12px, 2vw, 32px) 25px;
   background: #f6f8f6;
 }
-.mail-day {
-  display: flex;
-  justify-content: center;
-  margin: 12px 0;
+.mail-row-address {
+  color: #60736c;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-letter-subject {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+}
+.mail-letters .crm-date-separator {
+  width: fit-content;
+  margin-inline: auto;
 }
 .mail-letter {
-  width: 94%;
-  margin: 9px 0;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 86%;
+  min-width: min(210px, 80%);
+  margin: 9px 0 9px auto;
   padding: 12px 14px;
   border: 1px solid #dce6e0;
   border-radius: 9px;
@@ -222,7 +237,8 @@
   overflow-wrap: anywhere;
 }
 .mail-letter.outgoing {
-  margin-left: auto;
+  margin-left: 0;
+  margin-right: auto;
   background: #ecf6f0;
   border-color: #cde4d6;
 }

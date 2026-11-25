@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -12,6 +12,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { api } from "./api";
+import { clockTime, dayKey, dayLabel, shortTime } from "./dialog-time";
 import { LinkedText } from "./MessageTools";
 import {
   OneCCandidates,
@@ -22,16 +23,17 @@ import "./mail.css";
 
 type Contact = { name: string; email: string };
 type Summary = {
-  id: string;
+  email: string;
+  name: string;
+  threadId: string;
   subject: string;
-  contacts: Contact[];
   snippet: string;
   at: number;
   unread: boolean;
-  count: number | null;
 };
 type Letter = {
   id: string;
+  subject: string;
   sender: Contact | null;
   recipients: Contact[];
   outgoing: boolean;
@@ -39,23 +41,12 @@ type Letter = {
   text: string;
   attachments: string[];
 };
-type Thread = Summary & { messages: Letter[] };
+type HistoryPage = { messages: Letter[]; next: string | null };
 type MailPage = {
   mailbox: string | null;
-  threads: Summary[];
+  dialogs: Summary[];
   next: string | null;
 };
-const clock = new Intl.DateTimeFormat("ru", {
-  timeZone: "Asia/Seoul",
-  hour: "2-digit",
-  minute: "2-digit",
-});
-const date = new Intl.DateTimeFormat("ru", {
-  timeZone: "Asia/Seoul",
-  day: "numeric",
-  month: "short",
-  year: "numeric",
-});
 const display = (c?: Contact | null) =>
   c?.name || c?.email || "Неизвестный отправитель";
 
@@ -69,19 +60,16 @@ function Retry({ error, retry }: { error: Error; retry: () => void }) {
 }
 
 function CustomerPanel({
-  contacts,
+  email,
+  mailbox,
   threadId,
 }: {
-  contacts: Contact[];
+  email: string;
+  mailbox: string;
   threadId: string;
 }) {
-  const [chosen, choose] = useState("");
-  const email =
-    contacts.length === 1
-      ? contacts[0].email
-      : contacts.find((c) => c.email === chosen)?.email || "";
   const customer = useQuery({
-    queryKey: ["mail", "customer", threadId, email],
+    queryKey: ["mail", "customer", mailbox, email, threadId],
     enabled: !!email,
     staleTime: 15 * 60_000,
     gcTime: 0,
@@ -101,42 +89,22 @@ function CustomerPanel({
         <h3>Клиент и заказы</h3>
       </div>
       <div className="mail-client-body">
-        {contacts.length > 1 && (
-          <label>
-            Участник переписки
-            <select value={email} onChange={(e) => choose(e.target.value)}>
-              <option value="">Выберите email для поиска в 1С</option>
-              {contacts.map((c) => (
-                <option key={c.email} value={c.email}>
-                  {c.email}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {contacts.length === 1 && (
-          <div className="mail-contact">
-            <Mail size={15} />
-            <span>{email}</span>
-          </div>
-        )}
-        {!contacts.length && (
-          <p className="mail-muted">В переписке нет адреса клиента.</p>
-        )}
-        {email && (
-          <div className="mail-onec-heading">
-            <strong>Данные из 1С</strong>
-            <button
-              className="mail-icon"
-              title="Обновить данные 1С"
-              aria-label="Обновить данные 1С"
-              disabled={customer.isFetching}
-              onClick={() => void customer.refetch()}
-            >
-              <RefreshCw size={14} />
-            </button>
-          </div>
-        )}
+        <div className="mail-contact">
+          <Mail size={15} />
+          <span>{email}</span>
+        </div>
+        <div className="mail-onec-heading">
+          <strong>Данные из 1С</strong>
+          <button
+            className="mail-icon"
+            title="Обновить данные 1С"
+            aria-label="Обновить данные 1С"
+            disabled={customer.isFetching}
+            onClick={() => void customer.refetch()}
+          >
+            <RefreshCw size={14} />
+          </button>
+        </div>
         {customer.isLoading && (
           <p role="status" className="mail-muted">
             Ищем клиента по email…
@@ -172,36 +140,64 @@ export function MailPage({
   const [selected, select] = useState("");
   const [pane, setPane] = useState("list");
   const pages = useInfiniteQuery({
-    queryKey: ["mail", "threads", search],
+    queryKey: ["mail", "dialogs", search],
     initialPageParam: "",
     gcTime: 0,
     staleTime: 30_000,
     retry: false,
     queryFn: ({ pageParam }) =>
       api<MailPage>(
-        "/api/mail/threads?" +
+        "/api/mail/dialogs?" +
           new URLSearchParams({ page: pageParam, q: search }),
       ),
     getNextPageParam: (last) => last.next ?? undefined,
   });
   const mailbox = pages.data?.pages[0].mailbox;
-  const byId = new Map<string, Summary>();
+  const byEmail = new Map<string, Summary>();
   for (const page of pages.data?.pages ?? [])
-    for (const row of page.threads)
-      if (!byId.has(row.id)) byId.set(row.id, row);
-  const rows = [...byId.values()];
-  const active = byId.get(selected) || rows[0];
-  const thread = useQuery({
-    queryKey: ["mail", "thread", mailbox, active?.id, active?.at],
+    for (const row of page.dialogs) {
+      const previous = byEmail.get(row.email);
+      if (!previous || row.at > previous.at) byEmail.set(row.email, row);
+    }
+  const rows = [...byEmail.values()].sort((a, b) => b.at - a.at);
+  const active = byEmail.get(selected) || rows[0];
+  const history = useInfiniteQuery({
+    queryKey: ["mail", "history", mailbox, active?.email, active?.at],
     enabled:
       !!mailbox && !!active && (!pages.isError || pages.isFetchNextPageError),
+    initialPageParam: "",
     staleTime: 30_000,
     gcTime: 0,
     retry: false,
-    queryFn: () =>
-      api<Thread>("/api/mail/threads/" + encodeURIComponent(active!.id)),
+    queryFn: ({ pageParam }) =>
+      api<HistoryPage>(
+        "/api/mail/dialogs/messages?" +
+          new URLSearchParams({ email: active!.email, page: pageParam }),
+      ),
+    getNextPageParam: (last) => last.next ?? undefined,
   });
-  const count = thread.data?.count ?? active?.count;
+  const letters = new Map<string, Letter>();
+  for (const page of history.data?.pages ?? [])
+    for (const message of page.messages) letters.set(message.id, message);
+  const ordered = [...letters.values()].sort(
+    (a, b) => a.at - b.at || a.id.localeCompare(b.id),
+  );
+  const scroller = useRef<HTMLDivElement>(null);
+  const scrollState = useRef({ email: "", oldest: "", height: 0 });
+  useLayoutEffect(() => {
+    const box = scroller.current;
+    if (!box?.clientHeight || !active || !history.data) return;
+    const oldest = ordered[0]?.id ?? "";
+    const previous = scrollState.current;
+    if (previous.email !== active.email) box.scrollTop = box.scrollHeight;
+    else if (previous.oldest && previous.oldest !== oldest)
+      box.scrollTop += box.scrollHeight - previous.height;
+    scrollState.current = {
+      email: active.email,
+      oldest,
+      height: box.scrollHeight,
+    };
+  });
   function submit(event: FormEvent) {
     event.preventDefault();
     select("");
@@ -210,7 +206,7 @@ export function MailPage({
   }
   function refresh() {
     void pages.refetch();
-    if (active) void thread.refetch();
+    if (active) void history.refetch();
   }
   return (
     <section className="mail-page" aria-label="Почта Gmail">
@@ -281,22 +277,21 @@ export function MailPage({
             <div className="mail-rows">
               {rows.map((row) => (
                 <button
-                  key={row.id}
-                  aria-pressed={row.id === active?.id}
+                  key={row.email}
+                  aria-pressed={row.email === active?.email}
                   className="mail-row"
                   onClick={() => {
-                    select(row.id);
+                    select(row.email);
                     setPane("thread");
                   }}
                 >
                   <span className="mail-row-meta">
-                    <span>
-                      {row.contacts.length ? display(row.contacts[0]) : mailbox}
-                    </span>
-                    <time>
-                      {date.format(row.at).replace(/\s*\d{4}\s*г\.?$/, "")}
-                    </time>
+                    <span>{row.name || row.email}</span>
+                    <time>{shortTime(row.at)}</time>
                   </span>
+                  {row.name && (
+                    <span className="mail-row-address">{row.email}</span>
+                  )}
                   <strong>
                     {row.unread && <i aria-label="Непрочитанное" />}
                     {row.subject || "Без темы"}
@@ -326,7 +321,7 @@ export function MailPage({
               )}
             </div>
           </section>
-          <section className="mail-thread" aria-label="Цепочка писем">
+          <section className="mail-thread" aria-label="Письма собеседника">
             <div className="mail-mobile-tools">
               <button onClick={() => setPane("list")}>
                 <ArrowLeft size={14} />
@@ -340,65 +335,91 @@ export function MailPage({
             {active ? (
               <>
                 <div className="mail-subject">
-                  <h2 dir="auto">{active.subject || "Без темы"}</h2>
-                  {count != null && <small>Писем в цепочке · {count}</small>}
+                  <h2 dir="auto">{active.name || active.email}</h2>
+                  {active.name && <small>{active.email}</small>}
                 </div>
-                <div className="mail-letters" key={active.id}>
-                  {thread.isLoading && (
+                <div className="mail-letters" key={active.email} ref={scroller}>
+                  {history.isLoading && (
                     <p role="status" className="mail-muted">
                       Загружаем письма…
                     </p>
                   )}
-                  {thread.error ? (
+                  {history.error && (
                     <Retry
-                      error={thread.error}
-                      retry={() => void thread.refetch()}
+                      error={history.error}
+                      retry={() =>
+                        void (history.isFetchNextPageError
+                          ? history.fetchNextPage()
+                          : history.refetch())
+                      }
                     />
-                  ) : (
-                    thread.data?.messages.map((m, i, messages) => (
-                      <div key={m.id}>
-                        {(i === 0 ||
-                          date.format(messages[i - 1].at) !==
-                            date.format(m.at)) && (
-                          <div className="mail-day">{date.format(m.at)}</div>
-                        )}
-                        <article
-                          className={
-                            "mail-letter" + (m.outgoing ? " outgoing" : "")
-                          }
-                        >
-                          <div className="mail-letter-heading">
-                            <strong dir="auto">{display(m.sender)}</strong>
-                            <time title={date.format(m.at) + " · Сеул"}>
-                              {clock.format(m.at)}
-                            </time>
-                          </div>
-                          <div className="mail-addresses">
-                            {m.sender?.email}
-                            {m.recipients.length > 0 && (
-                              <>
-                                {" "}
-                                → {m.recipients.map((c) => c.email).join(", ")}
-                              </>
-                            )}
-                          </div>
-                          <div className="mail-text" dir="auto">
-                            <LinkedText text={m.text} />
-                          </div>
-                          {m.attachments.map((name, index) => (
-                            <span className="mail-file" key={index}>
-                              <Paperclip size={13} />
-                              {name}
-                            </span>
-                          ))}
-                        </article>
-                      </div>
-                    ))
                   )}
+                  {history.hasNextPage && !history.isFetchNextPageError && (
+                    <button
+                      className="mail-more"
+                      disabled={history.isFetching}
+                      onClick={() => void history.fetchNextPage()}
+                    >
+                      {history.isFetchingNextPage
+                        ? "Загрузка…"
+                        : "Показать более ранние письма"}
+                    </button>
+                  )}
+                  {history.data && !ordered.length && !history.hasNextPage && (
+                    <p className="mail-muted">
+                      Писем с этим адресом больше нет.
+                    </p>
+                  )}
+                  {ordered.map((m, i, messages) => (
+                    <div key={m.id}>
+                      {(i === 0 ||
+                        dayKey(messages[i - 1].at) !== dayKey(m.at)) && (
+                        <div className="crm-date-separator">
+                          {dayLabel(m.at)}
+                        </div>
+                      )}
+                      <article
+                        className={
+                          "mail-letter" + (m.outgoing ? " outgoing" : "")
+                        }
+                      >
+                        <div className="mail-letter-heading">
+                          <strong dir="auto">{display(m.sender)}</strong>
+                          <time
+                            dateTime={new Date(m.at).toISOString()}
+                            title={dayLabel(m.at) + " · Сеул"}
+                          >
+                            {clockTime(m.at)}
+                          </time>
+                        </div>
+                        <div className="mail-addresses">
+                          {m.sender?.email}
+                          {m.recipients.length > 0 && (
+                            <>
+                              {" "}
+                              → {m.recipients.map((c) => c.email).join(", ")}
+                            </>
+                          )}
+                        </div>
+                        <strong className="mail-letter-subject" dir="auto">
+                          {m.subject || "Без темы"}
+                        </strong>
+                        <div className="mail-text" dir="auto">
+                          <LinkedText text={m.text} />
+                        </div>
+                        {m.attachments.map((name, index) => (
+                          <span className="mail-file" key={index}>
+                            <Paperclip size={13} />
+                            {name}
+                          </span>
+                        ))}
+                      </article>
+                    </div>
+                  ))}
                 </div>
               </>
             ) : (
-              <div className="mail-empty">Выберите цепочку писем</div>
+              <div className="mail-empty">Выберите собеседника</div>
             )}
           </section>
           <aside className="mail-client">
@@ -407,11 +428,12 @@ export function MailPage({
                 <ArrowLeft size={14} />К письмам
               </button>
             </div>
-            {active && thread.data && !thread.error ? (
+            {active && mailbox ? (
               <CustomerPanel
-                key={thread.data.id}
-                threadId={thread.data.id}
-                contacts={thread.data.contacts}
+                key={active.email}
+                email={active.email}
+                mailbox={mailbox}
+                threadId={active.threadId}
               />
             ) : (
               <div className="mail-pane-title">
