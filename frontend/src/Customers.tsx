@@ -30,7 +30,7 @@ import {
 import "./customer-i18n";
 import "./customers.css";
 import { TranslationFields } from "./MessageTools";
-import { OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
+import { OneCCandidates, OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
 
 type CustomerDetail = CustomerLite & {
   redirected_from?: string | null;
@@ -48,6 +48,7 @@ type CustomerDetail = CustomerLite & {
       status: string;
       stale: boolean;
       clients: OneCClient[];
+      candidates?: OneCClient[];
     };
   }[];
   tasks: {
@@ -475,10 +476,9 @@ function CustomerView({
             {c.conversations.map((chat) => (
               <div key={chat.id} className="customer-order-source">
                 <b>{chat.phone}</b>
-                <small>
-                  {t(chat.onec.status)}
-                  {chat.onec.stale ? " · " + t("stale") : ""}
-                </small>
+                {chat.onec.status !== "multiple" && <small>{t(chat.onec.status)}</small>}
+                {chat.onec.stale && <small>{t("stale")}</small>}
+                <OneCCandidates candidates={chat.onec.candidates} />
                 {chat.onec.clients.map((cl, i) => (
                   <OneCCustomerDetails key={i} client={cl} />
                 ))}

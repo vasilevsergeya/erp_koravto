@@ -12,7 +12,7 @@ from sqlalchemy import or_, select, text, update
 
 from app.core.db import SessionLocal
 from app.core.settings import get_setting
-from app.integrations.onec import OneCAdapter, OneCError, exact_phone, phone_country, phone_digits
+from app.integrations.onec import OneCAdapter, OneCError, phone_country, phone_digits
 from app.models import Conversation, CustomerIdentity, now
 
 log = logging.getLogger("crm")
@@ -50,27 +50,14 @@ def confirmed_emails(db, customer_id):
     )
 
 
-def matches_account(account, phone, emails):
-    return bool(
-        (phone and exact_phone(account.get("matched_phone", "")) == phone)
-        or account.get("matched_email", "").strip().lower() in emails
-    )
-
-
 def customer_snapshot(c, db, *, settings=None):
     values, fingerprint = settings or connection_settings(db)
     phone = lookup_phone(c)
     valid = c.onec_phone == phone and c.onec_config == fingerprint
-    clients = c.onec_clients if valid else []
-    emails = (
-        confirmed_emails(db, c.customer_id)
-        if any(cl.get("matched_email") for cl in clients)
-        else set()
-    )
-    verified = [cl for cl in clients if matches_account(cl, exact_phone(c.phone), emails)]
-    candidates = [cl for cl in clients if cl not in verified]
-    clients = verified
     checked = c.onec_checked_at if valid else None
+    accounts = c.onec_clients if checked and phone and all(values) else []
+    clients = accounts if len(accounts) == 1 else []
+    candidates = accounts if len(accounts) > 1 else []
     error = c.onec_error if valid else None
     if not all(values):
         status, clients, checked, error = "not_configured", [], None, "not_configured"
@@ -80,20 +67,16 @@ def customer_snapshot(c, db, *, settings=None):
         status = "unavailable"
     elif not checked:
         status = "pending"
+    elif candidates:
+        status = "multiple"
+    elif clients:
+        status = "matched"
     else:
-        status = (
-            "matched"
-            if len(clients) == 1
-            else "multiple"
-            if clients
-            else "unverified"
-            if candidates
-            else "not_found"
-        )
+        status = "not_found"
     return {
         "status": status,
         "clients": clients,
-        "candidates": candidates if all(values) and phone else [],
+        "candidates": candidates,
         "phone_country": phone_country(c.phone),
         "checked_at": checked,
         "stale": bool(checked and (error or checked < now() - TTL)),

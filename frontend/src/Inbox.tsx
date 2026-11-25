@@ -71,7 +71,7 @@ import { DraftPanel } from "./AI";
 import { DialogSummary, useSummaryLanguage } from "./DialogSummary";
 import { loadDraft, saveDraft, removeDraft } from "./inbox-drafts";
 import { taskLabel } from "./task-i18n";
-import { OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
+import { OneCCandidates, OneCCustomerDetails, type OneCClient } from "./OneCCustomerDetails";
 
 type Channel = {
   channelId: string;
@@ -894,11 +894,9 @@ export function Inbox({ user }: { user: User }) {
         )}
         {onec && (
           <>
-            {!["matched", "not_found"].includes(onec.status) && (
+            {!["matched", "multiple", "not_found"].includes(onec.status) && (
               <p className="crm-muted" role="status">
-                {onec.status === "unverified"
-                  ? "Точное совпадение телефона не подтверждено"
-                  : t("onec_" + onec.status)}
+                {t("onec_" + onec.status)}
               </p>
             )}
             {onec.error && onec.status === "unavailable" && (
@@ -908,20 +906,7 @@ export function Inbox({ user }: { user: User }) {
                 })}
               </p>
             )}
-            {!!onec.candidates?.length && (
-              <details className="crm-onec-candidates">
-                <summary>
-                  Возможные совпадения · {onec.candidates.length}
-                </summary>
-                <small>
-                  Подсказки из 1С. Эти клиенты и заказы не привязаны к диалогу и
-                  не используются AI.
-                </small>
-                {onec.candidates.map((client, index) => (
-                  <OneCCustomerDetails key={index} client={client} compact />
-                ))}
-              </details>
-            )}
+            <OneCCandidates candidates={onec.candidates} compact />
             {onec.clients.map((client, index) => (
               <OneCCustomerDetails key={index} client={client} compact />
             ))}

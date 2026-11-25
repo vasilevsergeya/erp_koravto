@@ -18,6 +18,7 @@ export type OneCClient = {
 };
 
 i18n.addResourceBundle("ru", "onecOrders", {
+  possibleMatch: "Возможное совпадение",
   country: "Страна из 1С",
   orders: "Заказы",
   orderNumber: "Заказ",
@@ -28,6 +29,7 @@ i18n.addResourceBundle("ru", "onecOrders", {
   numbersOnly: "Подробности заказов ещё не получены из 1С",
 });
 i18n.addResourceBundle("en", "onecOrders", {
+  possibleMatch: "Possible match",
   country: "Country in 1C",
   orders: "Orders",
   orderNumber: "Order",
@@ -105,5 +107,24 @@ export function OneCCustomerDetails({
         <p className="onec-order-hint">{t("noOrders")}</p>
       )}
     </section>
+  );
+}
+
+export function OneCCandidates({
+  candidates,
+  compact = false,
+}: {
+  candidates?: OneCClient[];
+  compact?: boolean;
+}) {
+  const { t } = useTranslation("onecOrders");
+  if (!candidates || candidates.length < 2) return null;
+  return (
+    <details className="crm-onec-candidates">
+      <summary>{t("possibleMatch")} · {candidates.length}</summary>
+      {candidates.map((client, index) => (
+        <OneCCustomerDetails key={index} client={client} compact={compact} />
+      ))}
+    </details>
   );
 }

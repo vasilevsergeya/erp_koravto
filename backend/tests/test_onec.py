@@ -292,9 +292,12 @@ class OneCAcceptance(unittest.TestCase):
             self.client.put(links, json={**selection, "linked": False}).status_code, 200
         )
         self.assertEqual(count(), 0)
-        self.mock.return_value = [{**account, "matched_phone": other["matched_phone"]}]
+        self.mock.return_value = [account, other]
         sync()
         self.assertIsNone(count())
+        self.mock.return_value = [{**account, "matched_phone": other["matched_phone"]}]
+        sync()
+        self.assertEqual(count(), 0)
 
     def test_confirmed_email_match_and_removal(self):
         from app.services.customers import attach_conversation, structure_lock
@@ -342,10 +345,12 @@ class OneCAcceptance(unittest.TestCase):
         self.assertIsNone(self.client.get("/api/conversations/" + self.cid).json()["order_count"])
 
     def test_lookup_updates_display_search_and_preserves_chat_data(self):
+        del self.mock.return_value[0]["matched_phone"]
         path = "/api/conversations/" + self.cid
         result = self.client.get(path + "/customer")
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json()["status"], "matched")
+        self.assertEqual(result.json()["candidates"], [])
         self.assertEqual(result.json()["clients"][0]["realizations"], ["#TEST-42", "000001"])
         self.client.get(path + "/customer")
         self.mock.assert_awaited_once_with("12025550123")
@@ -382,7 +387,8 @@ class OneCAcceptance(unittest.TestCase):
         ]
         result = self.client.get("/api/conversations/" + self.cid + "/customer").json()
         self.assertEqual(result["status"], "multiple")
-        self.assertEqual(result["clients"], self.mock.return_value)
+        self.assertEqual(result["clients"], [])
+        self.assertEqual(result["candidates"], self.mock.return_value)
         c = self.client.get("/api/conversations/" + self.cid).json()
         self.assertEqual(c["display_name"], "WhatsApp name")
 

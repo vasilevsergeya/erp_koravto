@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.core.db import SessionLocal
 from app.integrations.onec import OneCAdapter, OneCError, exact_phone, phone_digits
 from app.models import Conversation, Customer, CustomerOneCLink, now
-from app.services.onec_customers import confirmed_emails, connection_settings, matches_account
+from app.services.onec_customers import connection_settings
 
 log = logging.getLogger("crm")
 
@@ -44,7 +44,6 @@ def recalculate(db, customer_id):
     settings, fingerprint = connection_settings(db)
     accounts = {}
     manual = set(profile.order_numbers)
-    emails = confirmed_emails(db, customer_id)
     # The most recently checked snapshot wins across dialogs of a shared counterparty.
     for c in db.scalars(
         select(Conversation)
@@ -57,14 +56,13 @@ def recalculate(db, customer_id):
             not all(settings)
             or c.onec_config != fingerprint
             or not c.onec_checked_at
+            or len(c.onec_clients) != 1
             or c.onec_phone != phone_digits(c.phone)
         ):
             continue
-        for i, account in enumerate(c.onec_clients):
-            if not matches_account(account, phone, emails):
-                continue
-            key = account.get("counterparty_id") or (phone, i)
-            accounts[key] = account
+        account = c.onec_clients[0]
+        key = account.get("counterparty_id") or (phone, 0)
+        accounts[key] = account
     incomplete = False
     for link in db.scalars(
         select(CustomerOneCLink).where(
