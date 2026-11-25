@@ -17,10 +17,18 @@ from functools import partial
 from imapclient import IMAPClient
 from imapclient.exceptions import LoginError
 
-from app.integrations.gmail import GmailError, decoded_header, describe, html_to_text
+from app.integrations.gmail import (
+    GmailError,
+    belongs_to,
+    correspondent_query,
+    decoded_header,
+    describe,
+    dialog_rows,
+    html_to_text,
+)
 
 _POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gmail-imap")
-HEADERS = "HEADER.FIELDS (FROM TO CC SUBJECT)"
+HEADERS = "HEADER.FIELDS (FROM TO CC BCC SUBJECT)"
 FIELDS = ["X-GM-THRID", "X-GM-LABELS", "INTERNALDATE", "FLAGS", f"BODY.PEEK[{HEADERS}]"]
 PAGE = 15
 MAX_TEXT = 12 * 1024 * 1024
@@ -178,11 +186,16 @@ def read_thread(client, info, email, thread_id, full):
     result = describe(thread, email, full=True)
     if not result:
         raise GmailError("not_found")
+    load_text(client, rows, result["messages"])
+    return result
+
+
+def load_text(client, rows, messages):
     remaining = MAX_TEXT
     # Fetch equivalent sections together across messages. Named attachments stay on Gmail.
     sections: dict[str, dict] = {}
     texts: dict[str, list[str]] = {}
-    for msg in result["messages"]:
+    for msg in messages:
         uid = int(msg["id"])
         parts = text_parts(rows[uid][b"BODYSTRUCTURE"], msg["attachments"])
         texts[msg["id"]] = [""] * len(parts)
@@ -197,12 +210,11 @@ def read_thread(client, info, email, thread_id, full):
             texts[str(uid)][i] = decode_text(
                 row[f"BODY[{section}]".encode()], subtype, charset, encoding
             )
-    for msg in result["messages"]:
+    for msg in messages:
         msg["text"] = "\n\n".join(filter(None, texts[msg["id"]]))
-    return result
 
 
-def list_threads(client, info, email, page, search):
+def search_uids(client, info, page, search):
     validity, high = int(info[b"UIDVALIDITY"]), int(info[b"UIDNEXT"]) - 1
     if page:
         cursor = re.fullmatch(r"(\d{1,10})\.(\d{1,10})", page)
@@ -210,7 +222,7 @@ def list_threads(client, info, email, page, search):
             raise GmailError("page_expired")
         high = min(high, int(cursor[2]))
     if high < 1:
-        return {"mailbox": email, "threads": [], "next": None}
+        return validity, 1, []
     # For browsing, limit the UID range before SEARCH. For an explicit search, Gmail's
     # index can find older matching messages without walking every intermediate page.
     low = 1 if search else max(1, high - 1023)
@@ -218,6 +230,11 @@ def list_threads(client, info, email, page, search):
     if search:
         criteria.extend(["X-GM-RAW", search + " "])  # Keep the query a single quoted IMAP argument.
     uids = sorted(client.search(criteria, charset="UTF-8" if search else None), reverse=True)
+    return validity, low, uids
+
+
+def list_threads(client, info, email, page, search):
+    validity, low, uids = search_uids(client, info, page, search)
     batch = uids[:60]
     rows = client.fetch(batch, FIELDS + ["BODYSTRUCTURE"]) if batch else {}
     summaries = {}
@@ -242,11 +259,7 @@ def list_threads(client, info, email, page, search):
                 previews.setdefault(section, {})[uid] = (latest, subtype, charset, encoding)
             if len(summaries) == PAGE:
                 break
-    for section, group in previews.items():
-        for uid, row in client.fetch(list(group), [f"BODY.PEEK[{section}]<0.1024>"]).items():
-            latest, subtype, charset, encoding = group[uid]
-            raw = row.get(f"BODY[{section}]<0>".encode(), b"")
-            latest["snippet"] = " ".join(decode_text(raw, subtype, charset, encoding).split())[:180]
+    load_previews(client, previews)
     if not batch or last == batch[-1] and len(batch) == len(uids):
         last = low
     return {
@@ -254,6 +267,60 @@ def list_threads(client, info, email, page, search):
         "threads": list(summaries.values()),
         "next": f"{validity}.{last - 1}" if last > 1 else None,
     }
+
+
+def load_previews(client, previews):
+    for section, group in previews.items():
+        for uid, row in client.fetch(list(group), [f"BODY.PEEK[{section}]<0.1024>"]).items():
+            latest, subtype, charset, encoding = group[uid]
+            raw = row.get(f"BODY[{section}]<0>".encode(), b"")
+            latest["snippet"] = " ".join(decode_text(raw, subtype, charset, encoding).split())[:180]
+
+
+def address_page(client, info, mailbox, page, search, email):
+    validity, low, uids = search_uids(
+        client, info, page, correspondent_query(email) if email else search
+    )
+    batch = uids[: 15 if email else 60]
+    floor = batch[-1] if len(batch) < len(uids) else low
+    cursor = f"{validity}.{floor - 1}" if floor > 1 else None
+    result = {"mailbox": mailbox, "next": cursor}
+    rows = client.fetch(batch, FIELDS + ["BODYSTRUCTURE"]) if batch else {}
+    summaries, messages = [], []
+    for uid in batch:
+        if uid not in rows:
+            continue
+        row = rows[uid]
+        single = {
+            "id": format(int(row[b"X-GM-THRID"]), "x"),
+            "messages": [metadata_message(uid, row)],
+        }
+        summary = describe(single, mailbox, full=bool(email))
+        if not summary:
+            continue
+        if email:
+            if belongs_to(summary, email):
+                messages.append(summary["messages"][0])
+        else:
+            summary["uid"] = uid
+            summaries.append(summary)
+    if email:
+        load_text(client, rows, messages)
+        return {**result, "messages": sorted(messages, key=lambda m: m["at"])}
+    # Only the latest visible message of each address needs a preview.
+    previews: dict[str, dict] = {}
+    seen: set[str] = set()
+    for summary in sorted(summaries, key=lambda s: s["at"], reverse=True):
+        keys = {c["email"].casefold() for c in summary["contacts"]}
+        if keys - seen:
+            seen.update(keys)
+            uid = summary["uid"]
+            parts = text_parts(rows[uid][b"BODYSTRUCTURE"], [])
+            if parts:
+                section, subtype, charset, encoding, _ = parts[0]
+                previews.setdefault(section, {})[uid] = (summary, subtype, charset, encoding)
+    load_previews(client, previews)
+    return {**result, "dialogs": dialog_rows(summaries)}
 
 
 class GmailImapMailbox:
@@ -284,3 +351,6 @@ class GmailImapMailbox:
 
     async def metadata(self, thread_id):
         return await self.run(read_thread, thread_id, False)
+
+    async def dialog_page(self, page, search, email=""):
+        return await self.run(address_page, page, search, email)

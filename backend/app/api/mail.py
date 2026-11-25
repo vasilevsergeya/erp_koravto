@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import current_user
 from app.core.db import get_db
 from app.core.settings import direct_secret
-from app.integrations.gmail import THREAD_ID, GmailError, GmailMailbox, bearer, describe
+from app.integrations.gmail import THREAD_ID, GmailError, GmailMailbox, bearer, belongs_to, describe
 from app.integrations.gmail_imap import imap_credentials
 from app.integrations.onec import OneCAdapter, OneCError
 from app.services.onec_customers import connection_settings
@@ -64,6 +64,30 @@ async def mailbox(value):
         raise HTTPException(status, message) from None
 
 
+@router.get("/dialogs")
+async def dialogs(
+    page: str = Query("", max_length=1024),
+    q: str = Query("", max_length=200, pattern=r"^[^\x00-\x1f\x7f]*$"),
+    value: str = Depends(gmail_setting),
+):
+    if not value:
+        return {"mailbox": None, "dialogs": [], "next": None}
+    async with mailbox(value) as gmail:
+        return await gmail.dialog_page(page, q)
+
+
+@router.get("/dialogs/messages")
+async def dialog_messages(
+    email: str = Query(max_length=254, pattern=r"^[^@\s<>\x00-\x1f\x7f]+@[^@\s<>\x00-\x1f\x7f]+$"),
+    page: str = Query("", max_length=1024),
+    value: str = Depends(gmail_setting),
+):
+    if not value:
+        raise HTTPException(409, "Почта Gmail ещё не подключена.")
+    async with mailbox(value) as gmail:
+        return await gmail.dialog_page(page, "", email)
+
+
 @router.get("/threads")
 async def threads(
     page: str = Query("", max_length=1024),
@@ -105,7 +129,7 @@ async def customer(
         return {"status": "not_configured", "clients": []}
     async with mailbox(value) as gmail:
         summary = describe(await gmail.metadata(thread_id), await gmail.address())
-        if not summary or email not in {c["email"] for c in summary["contacts"]}:
+        if not summary or not belongs_to(summary, email):
             raise HTTPException(404, "Адрес не найден в этой переписке.")
     try:
         clients = await OneCAdapter(*values).customers_by_email(email)

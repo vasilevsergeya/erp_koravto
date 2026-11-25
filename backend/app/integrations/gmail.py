@@ -20,7 +20,7 @@ import httpx
 BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 REFRESH_URL = "https://oauth2.googleapis.com/token"
 THREAD_ID = r"[a-zA-Z0-9_-]{1,128}"
-HEADERS = ("From", "To", "Cc", "Subject")
+HEADERS = ("From", "To", "Cc", "Bcc", "Subject")
 _METADATA: OrderedDict[tuple, dict] = OrderedDict()
 _access: tuple[str, float, str] = ("", 0, "")
 _refresh_lock = asyncio.Lock()
@@ -166,6 +166,8 @@ def describe(thread, mailbox, *, full=False):
         sender = addresses(header_values(part, "From"))
         recipients = addresses(header_values(part, "To") + header_values(part, "Cc"))
         outgoing = "SENT" in labels or bool(sender and sender[0]["email"].casefold() in own)
+        if outgoing:
+            recipients.extend(addresses(header_values(part, "Bcc")))
         for contact in recipients if outgoing else sender:
             key = contact["email"].casefold()
             if key not in own:
@@ -200,6 +202,34 @@ def describe(thread, mailbox, *, full=False):
     if full:
         result["messages"] = messages
     return result
+
+
+def correspondent_query(email):
+    # Quote the address as one search term, including addresses with a literal '+'.
+    term = '"' + email.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return "{" + " ".join(f"{field}:{term}" for field in ("from", "to", "cc", "bcc")) + "}"
+
+
+def dialog_rows(summaries):
+    rows = {}
+    for summary in sorted(summaries, key=lambda s: s["at"], reverse=True):
+        for contact in summary["contacts"]:
+            key = contact["email"].casefold()
+            if key not in rows:
+                rows[key] = {
+                    "email": key,
+                    "name": contact["name"],
+                    "threadId": summary["id"],  # Evidence for the existing 1C lookup.
+                    "subject": summary["subject"],
+                    "snippet": summary["snippet"],
+                    "at": summary["at"],
+                    "unread": summary["unread"],
+                }
+    return list(rows.values())
+
+
+def belongs_to(summary, email):
+    return any(c["email"].casefold() == email.casefold() for c in summary["contacts"])
 
 
 class GmailMailbox:
@@ -286,9 +316,16 @@ class GmailMailbox:
     async def thread(self, thread_id):
         mailbox = await self.address()
         thread = await self.get("/threads/" + thread_id, {"format": "full"})
+        await self.load_text_bodies(thread.get("messages", []))
+        result = await asyncio.to_thread(describe, thread, mailbox, full=True)
+        if result is None:
+            raise GmailError("not_found")
+        return result
+
+    async def load_text_bodies(self, messages):
         # Gmail may store a text body separately, just like a file attachment.
         remaining = 16 * 1024 * 1024
-        for message in thread.get("messages", []):
+        for message in messages:
             if {"DRAFT", "SPAM", "TRASH", "CHAT"}.intersection(message.get("labelIds", [])):
                 continue
             pending = [message["payload"]]
@@ -318,7 +355,46 @@ class GmailMailbox:
                 remaining -= len(body["data"]) * 3 // 4
                 if remaining < 0:
                     raise GmailError("too_large")
-        result = await asyncio.to_thread(describe, thread, mailbox, full=True)
-        if result is None:
-            raise GmailError("not_found")
-        return result
+
+    async def dialog_page(self, page, search, email=""):
+        mailbox = await self.address()
+        query = correspondent_query(email) if email else search
+        params = {"maxResults": 15 if email else 40, "q": "-in:drafts -in:chats " + query}
+        if page:
+            params["pageToken"] = page
+        listing = await self.get("/messages", params)
+        limit = asyncio.Semaphore(4)
+
+        async def load(item):
+            async with limit:
+                options = (
+                    {"format": "full"}
+                    if email
+                    else {
+                        "format": "metadata",
+                        "metadataHeaders": HEADERS,
+                        "fields": "id,threadId,labelIds,internalDate,snippet,payload/headers",
+                    }
+                )
+                try:
+                    message = await self.get("/messages/" + quote(item["id"], safe=""), options)
+                except GmailError as exc:
+                    if str(exc) == "not_found":
+                        return None
+                    raise
+                single = {"id": message["threadId"], "messages": [message]}
+                summary = describe(single, mailbox)
+                if not email or not summary:
+                    return summary
+                if not belongs_to(summary, email):
+                    return None
+                await self.load_text_bodies([message])
+                detail = await asyncio.to_thread(describe, single, mailbox, full=True)
+                return detail["messages"][0]
+
+        items = await asyncio.gather(*(load(item) for item in listing.get("messages", [])))
+        rows = [item for item in items if item]
+        result = {"mailbox": mailbox, "next": listing.get("nextPageToken")}
+        if email:
+            return {**result, "messages": sorted(rows, key=lambda m: m["at"])}
+        return {**result, "dialogs": dialog_rows(rows)}

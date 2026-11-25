@@ -1,3 +1,4 @@
+import { clockTime, dayKey, dayLabel, shortTime } from "./dialog-time";
 import { Counterparties } from "./Counterparties";
 import { CustomerAvatar } from "./CustomerAvatar";
 import { CustomerFields, CustomerMarks } from "./CustomerMarks";
@@ -128,32 +129,6 @@ const time = (value: string) =>
     timeStyle: "short",
     timeZone: "Asia/Seoul",
   }).format(new Date(value));
-const dayKey = (value: string) =>
-  new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(
-    new Date(value),
-  );
-const clockTime = (value: string) =>
-  new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Asia/Seoul",
-  }).format(new Date(value));
-const shortTime = (value: string) =>
-  dayKey(value) === dayKey(new Date().toISOString())
-    ? clockTime(value)
-    : new Intl.DateTimeFormat("ru-RU", {
-        day: "2-digit",
-        month: "2-digit",
-        timeZone: "Asia/Seoul",
-      }).format(new Date(value));
-const dayLabel = (value: string) =>
-  dayKey(value) === dayKey(new Date().toISOString())
-    ? "Сегодня"
-    : new Intl.DateTimeFormat("ru-RU", {
-        day: "numeric",
-        month: "long",
-        timeZone: "Asia/Seoul",
-      }).format(new Date(value));
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 

@@ -84,6 +84,57 @@ class GmailContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["contacts"], [{"email": EMAIL, "name": ""}])
         self.assertTrue(result["unread"])
 
+    async def test_address_dialogs_across_topics_and_recipients(self):
+        other = "second@example.test"
+        messages = [
+            message("1", 100, EMAIL.upper(), BOX, ["INBOX"], "First topic"),
+            message("2", 200, "alias@example.test", EMAIL, ["SENT"], "Second topic"),
+            message("3", 300, other, BOX, ["INBOX"], "Only for second contact"),
+            message("4", 400, BOX, EMAIL, ["DRAFT"], "Private"),
+        ]
+        messages[1]["payload"]["headers"].extend(
+            [
+                {"name": "Cc", "value": BOX + ", " + EMAIL.upper()},
+                {"name": "Bcc", "value": other},
+            ]
+        )
+        messages[2]["payload"]["headers"].append({"name": "Cc", "value": EMAIL})
+        for item in messages:
+            item["threadId"] = "t" + item["id"]
+            item["payload"]["headers"][0]["value"] = item["threadId"]
+
+        def handler(req):
+            path = req.url.path.rsplit("/", 1)[1]
+            if path == "profile":
+                return httpx.Response(200, json={"emailAddress": BOX})
+            if path == "messages":
+                if req.url.params["q"].endswith("search"):
+                    self.assertEqual(req.url.params.get("pageToken"), "cursor")
+                else:
+                    self.assertIn('from:"' + EMAIL + '"', req.url.params["q"])
+                return httpx.Response(
+                    200,
+                    json={
+                        "messages": [{"id": m["id"]} for m in messages],
+                        "nextPageToken": "older",
+                    },
+                )
+            return httpx.Response(200, json=messages[int(path) - 1])
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            gmail = GmailMailbox(client, "test")
+            page = await gmail.dialog_page("cursor", "search")
+            self.assertEqual(
+                [(r["email"], r["threadId"]) for r in page["dialogs"]],
+                [(other, "t3"), (EMAIL, "t2")],
+            )
+            history = await gmail.dialog_page("", "", EMAIL)
+            self.assertEqual(history["next"], "older")
+            self.assertEqual(
+                [(m["subject"], m["outgoing"]) for m in history["messages"]],
+                [("t1", False), ("t2", True)],
+            )
+
     async def test_separate_text_body_is_loaded_without_downloading_named_files(self):
         thread = sample()
         part = thread["messages"][1]["payload"]

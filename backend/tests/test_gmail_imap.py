@@ -9,6 +9,7 @@ from app.integrations.gmail import GmailError
 from app.integrations.gmail_imap import (
     HEADERS,
     GmailImapMailbox,
+    address_page,
     app_password,
     connection,
     list_threads,
@@ -79,6 +80,46 @@ class GmailImapTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ctor.call_args.args, ("imap.gmail.com",))
             self.assertEqual(ctor.call_args.kwargs["port"], 993)
             fake.store.assert_not_called()
+
+    def test_address_history_pages_cross_gmail_threads_and_filter_exact_sender(self):
+        other = "other@example.test"
+        rows = {
+            uid: wire_metadata(
+                uid,
+                BOX if uid % 2 else BUYER.upper(),
+                BUYER if uid % 2 else BOX,
+                b"\\Sent" if uid % 2 else b"",
+                tid=uid,
+            )
+            for uid in range(1, 18)
+        }
+        rows[17] = wire_metadata(17, other, BUYER, tid=16)
+        info = {b"UIDNEXT": 18, b"UIDVALIDITY": 9}
+        client = MagicMock()
+
+        def search(criteria, **kwargs):
+            upper = int(criteria[criteria.index("UID") + 1].split(":")[1])
+            return [uid for uid in rows if uid <= upper]
+
+        def fetch(ids, fields):
+            if "X-GM-THRID" in fields:
+                return {uid: rows[uid] for uid in ids}
+            key = b"BODY[1]<0>" if "<0." in fields[0] else b"BODY[1]"
+            return {uid: {key: b"SGVsbG8="} for uid in ids}
+
+        client.search.side_effect = search
+        client.fetch.side_effect = fetch
+        listing = address_page(client, info, BOX, "", "", "")
+        self.assertEqual({r["email"] for r in listing["dialogs"]}, {BUYER, other})
+        first = address_page(client, info, BOX, "", "", BUYER)
+        self.assertIn("X-GM-RAW", client.search.call_args.args[0])
+        self.assertEqual(first["next"], "9.2")
+        second = address_page(client, info, BOX, first["next"], "", BUYER)
+        self.assertIsNone(second["next"])
+        messages = first["messages"] + second["messages"]
+        self.assertCountEqual([m["id"] for m in messages], [str(i) for i in range(1, 17)])
+        self.assertTrue(all(m["outgoing"] == bool(int(m["id"]) % 2) for m in messages))
+        self.assertTrue(all(m["text"] == "Hello" for m in messages))
 
     def test_login_failure_does_not_echo_credentials(self):
         with patch("app.integrations.gmail_imap.IMAPClient") as ctor:
