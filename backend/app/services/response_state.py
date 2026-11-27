@@ -28,6 +28,7 @@ def acknowledge_reply(db, conversation, message):
     if (
         message.is_private_note
         or message.direction != "out"
+        or message.author_type not in ("user", "ai")
         or message.deleted
         or message.reply_acknowledged
     ):
@@ -35,7 +36,7 @@ def acknowledge_reply(db, conversation, message):
     if message.status not in ("sent", "delivered", "read"):
         return
     if message.reply_through_seq is None:
-        # Phone echoes and historical messages must not acknowledge newer incoming messages.
+        # Older CRM replies may predate the snapshot taken when composing a reply.
         message.reply_through_seq = (
             db.scalar(
                 select(func.max(Message.inbound_seq)).where(

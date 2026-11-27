@@ -232,18 +232,6 @@ async def process_webhook(ctx, event_id: str):
                 if inbound:
                     queue_inbound(db, conversation, message)
                 else:
-                    sending = db.scalar(
-                        select(Message.id)
-                        .where(
-                            Message.conversation_id == conversation.id,
-                            Message.id != message.id,
-                            Message.status.in_(["sending", "accepted", "retry", "uncertain"]),
-                            Message.author_type.in_(["user", "ai"]),
-                        )
-                        .limit(1)
-                    )
-                    if sending:
-                        message.reply_through_seq = 0
                     supersede(db, conversation.id, "manual_reply")
                 if created_at >= conversation.updated_at:
                     conversation.updated_at = created_at
