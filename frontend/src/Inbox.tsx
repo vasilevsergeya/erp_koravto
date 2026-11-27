@@ -828,11 +828,11 @@ export function Inbox({ user }: { user: User }) {
         <span>Телефон:</span>
         <a href={"tel:" + c?.phone}>{c?.phone || "—"}</a>
       </div>
-      {onec?.clients.length === 1 && (
+      {onec?.clients.length === 1 && onec.clients[0].email?.trim() && (
         <div className="crm-detail-row">
           <span>{t("onecOrders:email")}:</span>
           <b dir="auto" title={onec.clients[0].email}>
-            {onec.clients[0].email || "—"}
+            {onec.clients[0].email}
           </b>
         </div>
       )}
@@ -891,7 +891,7 @@ export function Inbox({ user }: { user: User }) {
           <b>
             {onec?.status === "not_found"
               ? "Заказы · 1С: не найдены"
-              : "Заказы · 1С"}
+              : t("onecCustomer")}
           </b>
           {canWrite && (
             <ActionIcon
@@ -936,7 +936,7 @@ export function Inbox({ user }: { user: User }) {
                 key={index}
                 client={client}
                 compact
-                showEmail={false}
+                showPrimaryEmail={false}
               />
             ))}
             {onec.stale && <p className="crm-onec-stale">{t("onecStale")}</p>}

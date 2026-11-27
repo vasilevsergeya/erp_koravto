@@ -464,7 +464,7 @@ function CustomerView({
             )}
           </section>
           <section className="surface customer-section">
-            <h3>{t("orders")}</h3>
+            <h3>{t("onecProfileAndOrders")}</h3>
             <div className="customer-tags">
               {allOrders.map((o) => (
                 <Badge variant="light" key={o}>
@@ -472,7 +472,6 @@ function CustomerView({
                 </Badge>
               ))}
             </div>
-            <p className="muted">{t("onecHint")}</p>
             {c.conversations.map((chat) => (
               <div key={chat.id} className="customer-order-source">
                 <b>{chat.phone}</b>

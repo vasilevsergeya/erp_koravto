@@ -1,4 +1,4 @@
-"""Customer phone contract, including optional order details added on 2026-11-16."""
+"""Customer profiles and order details returned by the 1C phone and email lookups."""
 
 import asyncio
 import json
@@ -136,11 +136,35 @@ class OneCAdapter:
                     matched = exact_phone(item["matched_phone"])
                     if matched:
                         customer["matched_phone"] = matched
-                for key in ("country", "email"):
+                for key in (
+                    "country",
+                    "email",
+                    "Company",
+                    "NickName",
+                    "FirstName",
+                    "LastName",
+                    "Ценообразование",
+                    "Incoterms",
+                    "Default_address_address1",
+                    "Default_address_address2",
+                    "Default_address_address3",
+                    "Default_address_city",
+                    "Default_address_country",
+                    "Default_address_zip",
+                    "Default_address_province_code",
+                ):
                     if key in item:
                         if not isinstance(item[key], str):
                             raise ValueError
                         customer[key] = item[key]
+                for key in ("emails", "phones"):
+                    if key in item:
+                        values = item[key]
+                        if not isinstance(values, list) or any(
+                            not isinstance(v, str) for v in values
+                        ):
+                            raise ValueError
+                        customer[key] = values
                 if "orders" in item:
                     orders = item["orders"]
                     if not isinstance(orders, list) or len(orders) != len(item["realizations"]):

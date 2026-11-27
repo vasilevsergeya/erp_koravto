@@ -104,6 +104,8 @@ class OneCContractTests(unittest.IsolatedAsyncioTestCase):
         invalid = [
             {"country": None},
             {"email": ["customer@example.com"]},
+            {"emails": "customer@example.com"},
+            {"phones": [123]},
             {"orders": None},
             {"orders": []},
             {"orders": [order, order]},
@@ -122,6 +124,33 @@ class OneCContractTests(unittest.IsolatedAsyncioTestCase):
                             "12025550123"
                         )
                 self.assertEqual(caught.exception.code, "invalid_response")
+
+    async def test_customer_profile_survives_phone_and_email_lookup(self):
+        client = {
+            "name": "Alex Morgan",
+            "FirstName": "Alex",
+            "LastName": "Morgan",
+            "NickName": "Alex",
+            "Company": "Example Auto Parts",
+            "country": "Australia",
+            "email": "alex@example.com",
+            "emails": ["alex@example.com", "orders@example.com"],
+            "phones": ["+61 2 5550 0100", "+61 491 570 006"],
+            "Default_address_address1": "25 Example Street",
+            "Default_address_address2": "Unit 4",
+            "Default_address_address3": "",
+            "Default_address_city": "Sydney",
+            "Default_address_country": "Australia",
+            "Default_address_zip": "0200",
+            "Default_address_province_code": "NSW",
+            "Ценообразование": "Опт",
+            "Incoterms": "FCA",
+            "realizations": [],
+        }
+        with self.transport(lambda r: httpx.Response(200, json={"clients": [client]})):
+            adapter = OneCAdapter("http://onec.invalid/prod", "u", "p")
+            self.assertEqual(await adapter.customers("12025550123"), [client])
+            self.assertEqual(await adapter.customers_by_email("orders@example.com"), [client])
 
     async def test_nonfinite_amount_is_rejected(self):
         for amount in ("NaN", "Infinity", "-Infinity", "1e999"):

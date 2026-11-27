@@ -8,14 +8,38 @@
   color: #193b35;
   font-size: 14px;
 }
-.onec-country {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin: 7px 0 12px;
-  font-size: 12px;
+.onec-profile-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 216px), 1fr));
+  gap: 12px 20px;
+  margin: 8px 0 14px;
 }
-.onec-country dt,
+.is-compact .onec-profile-groups {
+  grid-template-columns: minmax(0, 1fr);
+}
+.onec-profile-group {
+  min-width: 0;
+  border-top: 1px solid #dce8e4;
+  padding-top: 8px;
+}
+.onec-profile-group h4 {
+  color: #193b35;
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+.onec-customer-details .onec-profile-group dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  margin: 0;
+}
+.onec-profile-group dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 38%) minmax(0, 1fr);
+  gap: 8px;
+  line-height: 1.4;
+}
+.onec-profile-group dt,
 .onec-order-fields dt,
 .onec-order-heading > span,
 .onec-order-count,
@@ -23,8 +47,11 @@
   color: #647570;
   font-size: 12px;
 }
-.onec-country dd {
+.onec-profile-group dd {
   margin: 0;
+  color: #193b35;
+  font-size: 13px;
+  white-space: pre-line;
 }
 .onec-order-count {
   margin: 0 0 8px;
