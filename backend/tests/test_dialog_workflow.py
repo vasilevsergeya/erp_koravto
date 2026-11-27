@@ -145,26 +145,31 @@ class DialogWorkflowTests(unittest.TestCase):
         self.clients.append(client)
         return client
 
-    def incoming(self, text="Question"):
+    def webhook(self, payload):
         with SessionLocal() as db:
-            event = WebhookEvent(
-                payload={
-                    "messages": [
-                        {
-                            "messageId": uid(),
-                            "channelId": self.channel,
-                            "chatId": "12025550123",
-                            "status": "inbound",
-                            "type": "text",
-                            "text": text,
-                        }
-                    ]
-                }
-            )
+            event = WebhookEvent(payload=payload)
             db.add(event)
             db.commit()
             ident = event.id
         asyncio.run(process_webhook(self.context, ident))
+        with SessionLocal() as db:
+            self.assertEqual(db.get(WebhookEvent, ident).state, "processed")
+
+    def incoming(self, text="Question"):
+        self.webhook(
+            {
+                "messages": [
+                    {
+                        "messageId": uid(),
+                        "channelId": self.channel,
+                        "chatId": "12025550123",
+                        "status": "inbound",
+                        "type": "text",
+                        "text": text,
+                    }
+                ]
+            }
+        )
         return self.rows()[-1]
 
     def rows(self, client=None):
@@ -235,6 +240,37 @@ class DialogWorkflowTests(unittest.TestCase):
         self.assertEqual(self.client.post(path, json=body).json()["unread_count"], 1)
 
         self.assertEqual(unanswered(), before + 1)
+
+    def test_phone_message_and_receipts_preserve_unanswered_until_crm_reply(self):
+        self.incoming()
+        self.incoming("Another question")
+        external = uid()
+        echo = {
+            "messageId": external,
+            "channelId": self.channel,
+            "chatId": "12025550123",
+            "status": "sent",
+            "isEcho": True,
+            "text": "Sent outside ERP",
+        }
+        for payload in (
+            {"messages": [echo]},
+            {"messages": [echo]},
+            {"statuses": [{"messageId": external, "channelId": self.channel, "status": "read"}]},
+        ):
+            self.webhook(payload)
+            c = self.conversation()
+            self.assertEqual((c["unread_count"], c["state"]), (2, "waiting_us"))
+        phone = self.rows()[-1]
+        self.assertEqual((phone["author_type"], phone["status"]), ("employee_phone", "read"))
+
+        reply = self.send()
+        with patch.object(
+            WazzupAdapter, "send_message", AsyncMock(return_value={"messageId": uid()})
+        ):
+            asyncio.run(deliver_message(self.context, reply["id"]))
+        c = self.conversation()
+        self.assertEqual((c["unread_count"], c["state"]), (0, "waiting_customer"))
 
     def test_old_delivery_receipt_cannot_override_manually_required_reply(self):
         self.incoming()
