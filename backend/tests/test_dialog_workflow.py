@@ -14,15 +14,17 @@ from sqlalchemy import select, update
 from app.api.auth import COOKIE
 from app.core.config import config
 from app.core.db import SessionLocal
-from app.core.security import token_hash
+from app.core.security import file_signer, token_hash
 from app.integrations.channels.wazzup import IntegrationError, WazzupAdapter
 from app.integrations.openai import AIError
 from app.main import app
 from app.models import (
+    Attachment,
     Conversation,
     Customer,
     LoginSession,
     Message,
+    MessageHidden,
     MessageTranslation,
     User,
     WebhookEvent,
@@ -174,6 +176,60 @@ class DialogWorkflowTests(unittest.TestCase):
 
     def rows(self, client=None):
         return (client or self.client).get(f"/api/conversations/{self.cid}/messages").json()
+
+    def test_gallery_includes_older_images_in_order_and_respects_visibility(self):
+        other_cid = uid()
+        start = now() - timedelta(days=1)
+        with SessionLocal() as db:
+            db.add(Conversation(id=other_cid, channel_id=self.channel, chat_id=uid()))
+            db.flush()
+
+            def message(minute, mime=None, **fields):
+                attachment = None
+                if mime:
+                    attachment = Attachment(
+                        storage_key=uid(), backend="local", filename=uid(), size=10, mime=mime
+                    )
+                    db.add(attachment)
+                    db.flush()
+                row = Message(
+                    channel_id=self.channel,
+                    external_id=uid(),
+                    conversation_id=fields.pop("conversation_id", self.cid),
+                    direction=fields.pop("direction", "in"),
+                    author_type="user",
+                    created_at=start + timedelta(minutes=minute),
+                    attachment_id=attachment.id if attachment else None,
+                    **fields,
+                )
+                db.add(row)
+                db.flush()
+                return row
+
+            older = message(0, "image/jpeg")
+            for minute in range(1, 52):
+                message(minute)
+            recent = message(53, "image/png")
+            sent = message(54, "image/gif", direction="out", provider_at=start + timedelta(minutes=52))
+            hidden = message(55, "image/webp")
+            db.add(MessageHidden(user_id=self.user, message_id=hidden.id))
+            message(56, "image/png", deleted=True)
+            message(57, "image/svg+xml")
+            message(58, "video/mp4")
+            message(59, "image/jpeg", conversation_id=other_cid)
+            db.commit()
+            expected = [older, sent, recent]
+
+        url = f"/api/conversations/{self.cid}/images"
+        result = self.client.get(url)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual([item["id"] for item in result.json()], [row.id for row in expected])
+        for item, row in zip(result.json(), expected, strict=True):
+            self.assertEqual(file_signer().loads(item["url"].removeprefix("/api/files/")), row.attachment_id)
+        self.assertEqual(
+            [item["id"] for item in self.other_client.get(url).json()],
+            [row.id for row in expected] + [hidden.id],
+        )
 
     def conversation(self):
         return self.client.get("/api/conversations/" + self.cid).json()

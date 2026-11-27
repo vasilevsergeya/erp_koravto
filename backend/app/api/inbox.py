@@ -114,6 +114,14 @@ def customer_cards(db, customer_ids):
     return {p.id: (p, f"C-{n:05d}" if n else None, photo_at) for p, n, photo_at in rows}
 
 
+def visible_to_user(user_id):
+    return ~(
+        select(MessageHidden.message_id)
+        .where(MessageHidden.message_id == Message.id, MessageHidden.user_id == user_id)
+        .exists()
+    )
+
+
 def describe_conversation(c, db, user_id=None, *, cards=None, onec_settings=None):
     onec_settings = onec_settings or connection_settings(db)
     onec = customer_snapshot(c, db, settings=onec_settings)
@@ -129,9 +137,7 @@ def describe_conversation(c, db, user_id=None, *, cards=None, onec_settings=None
             Message.conversation_id == c.id,
             Message.is_private_note.is_(False),
             Message.author_type != "system",
-            ~select(MessageHidden.message_id)
-            .where(MessageHidden.message_id == Message.id, MessageHidden.user_id == user_id)
-            .exists(),
+            visible_to_user(user_id),
         )
         .order_by(Message.timeline_at.desc(), Message.id.desc())
         .limit(1)
@@ -453,6 +459,29 @@ async def refresh_customer_from_onec(conversation_id: str, user=Depends(writer))
     return result
 
 
+@router.get("/conversations/{conversation_id}/images")
+def conversation_images(
+    conversation_id: str, user=Depends(current_user), db: Session = Depends(get_db)
+):
+    rows = db.execute(
+        select(Message.id, Attachment.id, Attachment.filename)
+        .join(Attachment, Message.attachment_id == Attachment.id)
+        .where(
+            Message.conversation_id == conversation_id,
+            visible_to_user(user.id),
+            Message.deleted.is_(False),
+            Attachment.mime.startswith("image/"),
+            Attachment.mime != "image/svg+xml",
+        )
+        .order_by(Message.timeline_at, Message.id)
+    )
+    signer = file_signer()
+    return [
+        {"id": message_id, "name": name, "url": "/api/files/" + signer.dumps(attachment_id)}
+        for message_id, attachment_id, name in rows
+    ]
+
+
 @router.get("/conversations/{conversation_id}/messages")
 def messages(
     conversation_id: str,
@@ -464,9 +493,7 @@ def messages(
 ):
     query = select(Message).where(
         Message.conversation_id == conversation_id,
-        ~select(MessageHidden.message_id)
-        .where(MessageHidden.message_id == Message.id, MessageHidden.user_id == user.id)
-        .exists(),
+        visible_to_user(user.id),
     )
     if ids:
         keys = ids.split(",")

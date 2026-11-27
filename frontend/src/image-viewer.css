@@ -1,0 +1,117 @@
+.crm-message .crm-image-thumbnail {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  cursor: zoom-in;
+}
+.crm-image-viewer {
+  box-sizing: border-box;
+  width: min(1100px, 96vw);
+  height: min(900px, 92dvh);
+  max-width: 100vw;
+  max-height: 100dvh;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #455652;
+  border-radius: 10px;
+  background: #171d1b;
+  color: #fff;
+}
+.crm-image-viewer::backdrop {
+  background: rgb(10 17 15 / 75%);
+}
+.gallery-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.gallery-panel header,
+.gallery-tools,
+.gallery-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.gallery-panel header,
+.gallery-tools {
+  flex: none;
+  padding: 5px 8px;
+  background: #262f2c;
+}
+.gallery-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gallery-nav span,
+.gallery-scale {
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.gallery-nav span {
+  min-width: 5ch;
+  white-space: nowrap;
+}
+.gallery-tools {
+  justify-content: center;
+}
+.gallery-panel button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.gallery-panel button:enabled:hover {
+  background: #3d4c46;
+}
+.gallery-panel button:focus-visible {
+  outline: 2px solid #93d7ba;
+  outline-offset: -2px;
+}
+.gallery-panel button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.gallery-panel svg {
+  width: 20px;
+  height: 20px;
+}
+.gallery-viewport {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.gallery-frame,
+.gallery-viewport > span {
+  flex: none;
+  margin: auto;
+}
+.gallery-frame {
+  position: relative;
+  overflow: hidden;
+}
+.gallery-frame img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  max-width: none;
+  max-height: none;
+}
+@media (max-width: 699px) {
+  .crm-image-viewer {
+    width: 100vw;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+}

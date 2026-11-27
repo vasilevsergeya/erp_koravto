@@ -70,6 +70,7 @@ import { ConversationTasks, createTask, openTask } from "./Tasks";
 import { CustomerSidebar } from "./Customers";
 import { QuickReplyPicker } from "./QuickReplies";
 import { DraftPanel } from "./AI";
+import { ImageViewer, type DialogImage } from "./ImageViewer";
 import { DialogSummary, useSummaryLanguage } from "./DialogSummary";
 import { loadDraft, saveDraft, removeDraft } from "./inbox-drafts";
 import { taskLabel } from "./task-i18n";
@@ -222,6 +223,7 @@ export function Inbox({ user }: { user: User }) {
   const [sendId, setSendId] = useState<string>(
     () => initialDraft.current?.sendId || crypto.randomUUID(),
   );
+  const [openedImage, setOpenedImage] = useState<DialogImage | null>(null);
   const [older, setOlder] = useState<Message[]>([]);
   const [hasOlder, setHasOlder] = useState(true);
   const [newOpen, setNewOpen] = useState(false);
@@ -510,6 +512,7 @@ export function Inbox({ user }: { user: User }) {
       initialScroll.current = null;
       stickToBottom.current = true;
       setSelected(id);
+      setOpenedImage(null);
       setOlder([]);
       setHasOlder(true);
       setMessage(draft?.text || "");
@@ -1472,17 +1475,25 @@ export function Inbox({ user }: { user: User }) {
                       <div className="crm-attachment">
                         {m.attachment_mime?.startsWith("image/") &&
                         m.attachment_mime !== "image/svg+xml" ? (
-                          <a
-                            href={m.attachment_url}
-                            target="_blank"
-                            rel="noreferrer"
+                          <button
+                            type="button"
+                            className="crm-image-thumbnail"
+                            aria-haspopup="dialog"
+                            onClick={() => {
+                              if (m.attachment_url)
+                                setOpenedImage({
+                                  id: m.id,
+                                  name: m.attachment_name || "",
+                                  url: m.attachment_url,
+                                });
+                            }}
                           >
                             <img
                               loading="lazy"
                               src={m.attachment_url}
                               alt={m.attachment_name || t("attachment")}
                             />
-                          </a>
+                          </button>
                         ) : m.attachment_mime?.startsWith("audio/") ? (
                           <audio
                             controls
@@ -1812,6 +1823,14 @@ export function Inbox({ user }: { user: User }) {
               {columns.handle("panel")}
               {customerCard}
             </aside>
+          )}
+          {openedImage && (
+            <ImageViewer
+              key={selected}
+              conversationId={selected}
+              initialImage={openedImage}
+              onClose={() => setOpenedImage(null)}
+            />
           )}
           <Drawer
             opened={!!narrow && cardOpen}

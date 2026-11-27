@@ -94,6 +94,17 @@ const { chromium } = require("playwright"),
       created_at: new Date().toISOString(),
     },
   ];
+  const photoUrl = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1600;
+    canvas.height = 800;
+    return canvas.toDataURL("image/png");
+  });
+  const photos = ["archive", "recent"].map((id) => ({
+    id,
+    name: id + ".png",
+    url: photoUrl,
+  }));
   const summaryRequests = [];
   const summaryLanguages = new Map();
   let managerId = "user-test";
@@ -130,6 +141,17 @@ const { chromium } = require("playwright"),
       );
     else if (/\/conversations\/[^/]+$/.test(p))
       d = dialogs.find((x) => p.endsWith(x.id)) || dialogs[0];
+    else if (p === "/api/conversations/dialog-2/images") d = photos;
+    else if (p === "/api/conversations/dialog-2/messages")
+      d = [
+        {
+          ...msgs[0],
+          id: photos[1].id,
+          attachment_url: photoUrl,
+          attachment_name: photos[1].name,
+          attachment_mime: "image/png",
+        },
+      ];
     else if (p.endsWith("/messages")) d = msgs;
     else if (p.endsWith("/summary")) {
       summaryRequests.push([
@@ -198,6 +220,51 @@ const { chromium } = require("playwright"),
     (r) => r.fulfill({ json: { ok: true } }),
   );
   await page.goto(process.env.CRM_TEST_BASE_URL || "http://127.0.0.1:5173/");
+  await page.locator('[data-dialog-id="dialog-2"]').click();
+  const viewer = page.getByRole("dialog", { name: "Изображения диалога" });
+  const thumbnail = page.getByRole("button", { name: "recent.png" });
+  for (const width of [1366, 390]) {
+    await page.setViewportSize({ width, height: 768 });
+    await thumbnail.click();
+    await viewer.getByText("2 / 2").waitFor();
+    assert.ok(
+      await viewer
+        .getByRole("button", { name: "Следующее изображение" })
+        .isDisabled(),
+    );
+    await viewer
+      .getByRole("button", { name: "Предыдущее изображение" })
+      .click();
+    await viewer.getByRole("img", { name: "archive.png" }).waitFor();
+    assert.ok(
+      await viewer
+        .getByRole("button", { name: "Предыдущее изображение" })
+        .isDisabled(),
+    );
+    const photo = viewer.locator(".gallery-frame img");
+    await page.waitForFunction(
+      () => document.querySelector(".gallery-frame img")?.clientWidth > 0,
+    );
+    await viewer.getByRole("button", { name: "Повернуть вправо" }).click();
+    const rotated = await photo.boundingBox();
+    assert.ok(rotated.height > rotated.width);
+    await viewer.getByRole("button", { name: "Увеличить" }).click();
+    assert.ok((await photo.boundingBox()).height > rotated.height);
+    await viewer.getByRole("button", { name: "Уменьшить" }).click();
+    assert.equal((await photo.boundingBox()).height, rotated.height);
+    await viewer.getByRole("button", { name: "Повернуть влево" }).click();
+    await viewer.getByRole("button", { name: "Увеличить" }).click();
+    await page.keyboard.press("ArrowRight");
+    await viewer.getByText("2 / 2").waitFor();
+    assert.equal(await viewer.locator(".gallery-scale").innerText(), "100%");
+    await page.keyboard.press("Escape");
+    await viewer.waitFor({ state: "hidden" });
+    assert.equal(
+      await thumbnail.evaluate((el) => el === document.activeElement),
+      true,
+    );
+  }
+  await page.setViewportSize({ width: 1366, height: 768 });
   await page.locator('[data-dialog-id="dialog-0"]').click();
   await page.locator(".crm-message").first().waitFor();
   await page.getByRole("button", { name: "AI-сводка", exact: true }).click();
