@@ -94,16 +94,24 @@ const { chromium } = require("playwright"),
       created_at: new Date().toISOString(),
     },
   ];
-  const photoUrl = await page.evaluate(() => {
+  const photoUrls = await page.evaluate(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 1600;
     canvas.height = 800;
-    return canvas.toDataURL("image/png");
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const blank = canvas.toDataURL("image/png");
+    ctx.fillStyle = "black";
+    ctx.font = "56px Arial, sans-serif";
+    ctx.fillText("Артикул 12345", 80, 180);
+    ctx.fillText("PART 67890", 80, 290);
+    return [blank, canvas.toDataURL("image/png")];
   });
-  const photos = ["archive", "recent"].map((id) => ({
+  const photos = ["archive", "recent"].map((id, index) => ({
     id,
     name: id + ".png",
-    url: photoUrl,
+    url: photoUrls[index],
   }));
   const summaryRequests = [];
   const summaryLanguages = new Map();
@@ -147,7 +155,7 @@ const { chromium } = require("playwright"),
         {
           ...msgs[0],
           id: photos[1].id,
-          attachment_url: photoUrl,
+          attachment_url: photos[1].url,
           attachment_name: photos[1].name,
           attachment_mime: "image/png",
         },
@@ -223,10 +231,18 @@ const { chromium } = require("playwright"),
   await page.locator('[data-dialog-id="dialog-2"]').click();
   const viewer = page.getByRole("dialog", { name: "Изображения диалога" });
   const thumbnail = page.getByRole("button", { name: "recent.png" });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   for (const width of [1366, 390]) {
     await page.setViewportSize({ width, height: 768 });
     await thumbnail.click();
     await viewer.getByText("2 / 2").waitFor();
+    const copy = viewer.getByRole("button", { name: "Скопировать текст" });
+    await copy.click();
+    await viewer
+      .getByText("Текст скопирован", { exact: true })
+      .waitFor({ timeout: 60_000 });
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    assert.match(copied, /Артикул 12345\s+PART 67890/);
     assert.ok(
       await viewer
         .getByRole("button", { name: "Следующее изображение" })
@@ -240,6 +256,14 @@ const { chromium } = require("playwright"),
       await viewer
         .getByRole("button", { name: "Предыдущее изображение" })
         .isDisabled(),
+    );
+    await copy.click();
+    await viewer
+      .getByText("На изображении не найден текст.")
+      .waitFor({ timeout: 60_000 });
+    assert.equal(
+      await page.evaluate(() => navigator.clipboard.readText()),
+      copied,
     );
     const photo = viewer.locator(".gallery-frame img");
     await page.waitForFunction(

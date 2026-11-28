@@ -26,3 +26,5 @@ playwright-report/
 
 # Supplier credentials stay on the server, outside version control.
 integrations/parts/**/config.ini
+
+/frontend/public/ocr/

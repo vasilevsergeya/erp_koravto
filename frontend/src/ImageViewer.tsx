@@ -10,6 +10,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import { CopyImageText } from "./CopyImageText";
 import { api } from "./api";
 import "./image-viewer.css";
 
@@ -18,6 +19,7 @@ const scales = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 const fitIndex = scales.indexOf(1);
 
 function ImageCanvas({ image }: { image: DialogImage }) {
+  const imageRef = useRef<HTMLImageElement>(null);
   const { ref, width, height } = useElementSize();
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [angle, setAngle] = useState(0);
@@ -54,6 +56,7 @@ function ImageCanvas({ image }: { image: DialogImage }) {
             style={{ width: boxWidth * scale, height: boxHeight * scale }}
           >
             <img
+              ref={imageRef}
               src={image.url}
               alt={image.name || "Изображение"}
               draggable={false}
@@ -76,7 +79,7 @@ function ImageCanvas({ image }: { image: DialogImage }) {
       <div
         className="gallery-tools"
         role="group"
-        aria-label="Поворот и масштаб"
+        aria-label="Действия с изображением"
       >
         <button
           aria-label="Повернуть влево"
@@ -116,6 +119,12 @@ function ImageCanvas({ image }: { image: DialogImage }) {
         >
           <ZoomIn />
         </button>
+        <CopyImageText
+          key={angle}
+          image={imageRef}
+          angle={angle}
+          disabled={!size.w || failedUrl === image.url}
+        />
       </div>
     </>
   );
@@ -169,6 +178,7 @@ export function ImageViewer({
         if (event.target === dialog.current) onClose();
       }}
       onKeyDown={(event) => {
+        if (event.target instanceof HTMLTextAreaElement) return;
         if (event.altKey || event.ctrlKey || event.metaKey) return;
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
           event.preventDefault();

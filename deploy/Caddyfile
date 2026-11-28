@@ -17,13 +17,18 @@
 }
 {$PUBLIC_URL} {
     encode zstd gzip
+    # Only the OCR engine worker compiles WebAssembly.
+    map {path} {ocr_wasm} {
+        /ocr/worker.min.js "'wasm-unsafe-eval'"
+        default ""
+    }
     header {
         Strict-Transport-Security "max-age=31536000"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "DENY"
         Referrer-Policy "same-origin"
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
-        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        Content-Security-Policy "default-src 'self'; script-src 'self' {ocr_wasm}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         -Server
     }
     log {

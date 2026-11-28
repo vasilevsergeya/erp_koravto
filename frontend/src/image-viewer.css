@@ -55,6 +55,8 @@
   white-space: nowrap;
 }
 .gallery-tools {
+  position: relative;
+  flex-wrap: wrap;
   justify-content: center;
 }
 .gallery-panel button {
@@ -114,4 +116,31 @@
     border: 0;
     border-radius: 0;
   }
+}
+.gallery-panel .gallery-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-inline: 8px;
+}
+.gallery-ocr-status {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 95%;
+  text-align: center;
+  pointer-events: none;
+}
+.gallery-ocr-status:not(:empty) {
+  padding: 4px 10px;
+  border-radius: 5px;
+  background: #262f2c;
+}
+.gallery-ocr-result {
+  flex-basis: 100%;
+  min-height: 4em;
+  max-height: 18dvh;
+  resize: vertical;
 }
