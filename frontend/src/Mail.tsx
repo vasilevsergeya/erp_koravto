@@ -75,19 +75,26 @@ function CustomerPanel({
   mailbox: string;
   threadId: string;
 }) {
+  const queryClient = useQueryClient();
   const customer = useQuery({
     queryKey: ["mail", "customer", mailbox, email, threadId],
     enabled: !!email,
     staleTime: 15 * 60_000,
     gcTime: 0,
     retry: false,
-    queryFn: () =>
-      api<{ status: string; clients: OneCClient[] }>(
+    queryFn: async () => {
+      const result = await api<{ status: string; clients: OneCClient[] }>(
         "/api/mail/threads/" +
           encodeURIComponent(threadId) +
           "/customer?email=" +
           encodeURIComponent(email),
-      ),
+      );
+      if (result.status === "ok")
+        void queryClient.invalidateQueries({
+          queryKey: ["mail", "customer-matches", mailbox],
+        });
+      return result;
+    },
   });
   return (
     <>
@@ -174,6 +181,7 @@ export function MailPage({
       queryFn: () =>
         api<{
           matches: Record<string, "email" | "phone">;
+          onec_emails?: string[];
           pending: boolean;
         }>("/api/mail/dialogs/customer-matches", "POST", { ticket }),
       refetchInterval: (query: { state: { data?: { pending: boolean } } }) =>
@@ -187,6 +195,9 @@ export function MailPage({
   for (const page of matchPages)
     for (const [email, reason] of Object.entries(page.data?.matches ?? {}))
       if (reason === "email" || !matches.has(email)) matches.set(email, reason);
+  const onecEmails = new Set(
+    matchPages.flatMap((page) => page.data?.onec_emails ?? []),
+  );
   const byEmail = new Map<string, Summary>();
   for (const page of pages.data?.pages ?? [])
     for (const row of page.dialogs) {
@@ -335,6 +346,12 @@ export function MailPage({
                       {matches.get(row.email.toLowerCase()) === "email"
                         ? "Клиент ERP · email"
                         : "Клиент ERP · телефон из 1С"}
+                    </span>
+                  )}
+                  {onecEmails.has(row.email.toLowerCase()) && (
+                    <span className="mail-customer-match">
+                      <UserRoundCheck size={13} aria-hidden="true" />
+                      Клиент ERP · email из 1С
                     </span>
                   )}
                   <strong>

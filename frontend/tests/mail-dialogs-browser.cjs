@@ -20,7 +20,8 @@ const { chromium } = require("playwright");
     page.on("pageerror", (e) => errors.push(e.message));
     const buyer = "buyer@example.test",
       box = "sales@example.test",
-      second = "second@example.test";
+      second = "second@example.test",
+      onecOnly = "only-in-1c@example.test";
     const dates = [
       "2026-01-01T15:00:00Z",
       "2026-01-02T14:59:00Z",
@@ -98,6 +99,7 @@ const { chromium } = require("playwright");
               dialogs: [
                 { ...row, at: letters[0].at },
                 { ...row, email: second, name: "", at: 1 },
+                { ...row, email: onecOnly, name: "", at: 2 },
               ],
               next: null,
             }
@@ -109,11 +111,16 @@ const { chromium } = require("playwright");
           matchChecks++;
           json = {
             matches: matchChecks > 1 ? { [buyer]: "phone" } : {},
+            onec_emails: matchChecks > 1 ? [buyer] : [],
             pending: matchChecks === 1,
           };
         } else {
           assert.equal(ticket, "page2");
-          json = { matches: { [second]: "email" }, pending: false };
+          json = {
+            matches: { [second]: "email" },
+            onec_emails: [onecOnly],
+            pending: false,
+          };
         }
       } else if (p === "/api/mail/dialogs/messages")
         json =
@@ -203,7 +210,24 @@ const { chromium } = require("playwright");
     await page
       .getByText("Клиент ERP · телефон из 1С", { exact: true })
       .waitFor();
+    const onecLabel = "Клиент ERP · email из 1С";
+    await page
+      .locator(".mail-row")
+      .filter({ hasText: buyer })
+      .getByText(onecLabel, { exact: true })
+      .waitFor();
     await page.getByRole("button", { name: "Загрузить ещё" }).click();
+    const onlyIn1c = page.locator(".mail-row").filter({ hasText: onecOnly });
+    await onlyIn1c.getByText(onecLabel, { exact: true }).waitFor();
+    assert.equal(await onlyIn1c.locator(".mail-customer-match").count(), 1);
+    assert.equal(
+      await page
+        .locator(".mail-row")
+        .filter({ hasText: second })
+        .getByText(onecLabel, { exact: true })
+        .count(),
+      0,
+    );
     await page.getByText("Клиент ERP · email", { exact: true }).waitFor();
     await page.getByRole("button", { name: new RegExp(second) }).click();
     await page.getByText("Писем с этим адресом больше нет.").waitFor();
@@ -211,7 +235,7 @@ const { chromium } = require("playwright");
     await details.nth(0).getByText("0001").waitFor();
     assert.equal(await details.count(), 2);
     assert.equal(await details.locator(".onec-profile-group").count(), 0);
-    assert.equal(await page.locator(".mail-row").count(), 2);
+    assert.equal(await page.locator(".mail-row").count(), 3);
     assert.deepEqual(lookups, [buyer, second]);
     assert.deepEqual(errors, []);
     console.log(

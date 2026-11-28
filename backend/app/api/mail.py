@@ -13,7 +13,7 @@ from app.core.settings import direct_secret
 from app.integrations.gmail import THREAD_ID, GmailError, GmailMailbox, bearer, belongs_to, describe
 from app.integrations.gmail_imap import imap_credentials
 from app.integrations.onec import OneCAdapter, OneCError
-from app.services.mail_matches import match_page, page_signer
+from app.services.mail_matches import match_page, page_signer, remember_email_lookup
 from app.services.onec_customers import connection_settings
 
 router = APIRouter(prefix="/api/mail", tags=["mail"], dependencies=[Depends(current_user)])
@@ -135,9 +135,9 @@ async def thread(
 
 
 def onec_settings(db: Session = Depends(get_db)):
-    values, _ = connection_settings(db)
+    settings = connection_settings(db)
     db.commit()
-    return values
+    return settings
 
 
 @router.get("/threads/{thread_id}/customer")
@@ -145,10 +145,11 @@ async def customer(
     thread_id: str = Path(pattern="^" + THREAD_ID + "$"),
     value: str = Depends(gmail_setting),
     email: str = Query(max_length=254, pattern=r"^[^@\s<>]+@[^@\s<>]+$"),
-    values=Depends(onec_settings),
+    settings=Depends(onec_settings),
 ):
     if not value:
         raise HTTPException(409, "Почта Gmail ещё не подключена.")
+    values, fingerprint = settings
     if not all(values):
         return {"status": "not_configured", "clients": []}
     async with mailbox(value) as gmail:
@@ -159,4 +160,5 @@ async def customer(
         clients = await OneCAdapter(*values).customers_by_email(email)
     except OneCError:
         raise HTTPException(502, "Не удалось получить данные клиента из 1С.") from None
+    await remember_email_lookup(fingerprint, email, clients)
     return {"status": "ok", "clients": clients}

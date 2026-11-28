@@ -15,11 +15,12 @@ from app.api.auth import COOKIE
 from app.core.config import config
 from app.core.db import SessionLocal
 from app.core.security import token_hash
-from app.core.settings import invalidate_settings
+from app.core.settings import invalidate_settings, redis_client
 from app.integrations.gmail import REFRESH_URL, GmailMailbox, bearer, describe
 from app.integrations.mail_text import visible_mail_text
 from app.main import app
 from app.models import Conversation, LoginSession, Setting, User, now, uid
+from app.services.mail_matches import cache_key
 
 BOX = "parts@example.test"
 EMAIL = "buyer+parts@example.test"
@@ -362,6 +363,8 @@ class MailAcceptance(unittest.TestCase):
                 )
                 self.assertEqual(client.post(base).status_code, 405)
                 self.assertEqual(len(calls), 1)
+                cached = redis_client.get(cache_key("v", EMAIL))
+                self.assertEqual(json.loads(cached), {"found": True, "phones": []})
             with SessionLocal() as db:
                 self.assertEqual(
                     db.scalar(select(func.count()).select_from(Conversation)), initial_count

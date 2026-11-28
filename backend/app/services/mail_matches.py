@@ -18,7 +18,7 @@ from app.integrations.onec import OneCAdapter, OneCError, exact_phone
 from app.models import Customer, CustomerIdentity
 from app.services.onec_customers import connection_settings
 
-QUEUE = "crm:mail:phone-lookups:v1"
+QUEUE = "crm:mail:email-lookups:v2"
 HIT_TTL = 24 * 3600
 MISS_TTL = 6 * 3600
 RETRY_TTL = 60
@@ -32,8 +32,8 @@ def page_signer(gmail_setting):
 
 
 def cache_key(fingerprint, email):
-    digest = hashlib.sha256(email.encode()).hexdigest()
-    return f"crm:mail:phones:v1:{fingerprint}:{digest}"
+    digest = hashlib.sha256(email.strip().lower().encode()).hexdigest()
+    return f"crm:mail:email-lookup:v2:{fingerprint}:{digest}"
 
 
 def returned_phones(clients):
@@ -68,37 +68,56 @@ def match_page(db, emails):
     emails = list(dict.fromkeys(email.strip().lower() for email in emails))
     direct = card_values(db, "email", emails)
     matches = dict.fromkeys(direct, "email")
-    missing = [email for email in emails if email not in direct]
+    onec_emails: list[str] = []
     pending = False
-    if missing:
+    if emails:
         values, fingerprint = connection_settings(db)
         if all(values):
             try:
                 cached = cast(
                     list[bytes | None],
-                    redis_client.mget([cache_key(fingerprint, e) for e in missing]),
+                    redis_client.mget([cache_key(fingerprint, email) for email in emails]),
                 )
-                by_email = {}
+                phones_by_email = {}
                 queue = {}
-                for email, raw in zip(missing, cached, strict=True):
+                for email, raw in zip(emails, cached, strict=True):
                     if raw is None:
                         queue[json.dumps([fingerprint, email])] = time.time()
-                    elif raw != b"null":  # Temporary 1C failure; retry after its short TTL.
-                        by_email[email] = json.loads(raw)
+                    elif raw != b"null":
+                        lookup = json.loads(raw)
+                        if lookup["found"]:
+                            onec_emails.append(email)
+                            if email not in direct:
+                                phones_by_email[email] = lookup["phones"]
                 if queue:
                     with redis_client.pipeline() as pipe:
                         pipe.zadd(QUEUE, queue, nx=True)
                         pipe.expire(QUEUE, 3600)
                         pipe.execute()
                     pending = True
-                phones = {phone for numbers in by_email.values() for phone in numbers}
+                phones = {phone for numbers in phones_by_email.values() for phone in numbers}
                 known = card_values(db, "phone", phones)
-                for email, numbers in by_email.items():
+                for email, numbers in phones_by_email.items():
                     if not known.isdisjoint(numbers):
                         matches[email] = "phone"
             except RedisError:
                 pass  # Local email matches remain available; the next poll retries.
-    return {"matches": matches, "pending": pending}
+    return {"matches": matches, "onec_emails": onec_emails, "pending": pending}
+
+
+async def remember_email_lookup(fingerprint, email, clients, *, only_if_missing=False):
+    # The 1C endpoint matches by exact email. A returned customer can have no phone.
+    cached = json.dumps({"found": bool(clients), "phones": returned_phones(clients)})
+    try:
+        await asyncio.to_thread(
+            redis_client.set,
+            cache_key(fingerprint, email),
+            cached,
+            ex=HIT_TTL if clients else MISS_TTL,
+            nx=only_if_missing,
+        )
+    except RedisError:
+        log.warning("mail.lookup_cache_unavailable")
 
 
 def worker_connection():
@@ -123,10 +142,9 @@ async def lookup_next(redis):
         return
     try:
         clients = await OneCAdapter(*values).customers_by_email(email)
-        phones = returned_phones(clients)
-        await redis.set(key, json.dumps(phones), ex=HIT_TTL if phones else MISS_TTL)
+        await remember_email_lookup(fingerprint, email, clients, only_if_missing=True)
     except OneCError:
-        await redis.set(key, "null", ex=RETRY_TTL)
+        await redis.set(key, "null", ex=RETRY_TTL, nx=True)
 
 
 async def phone_lookup_loop(redis):

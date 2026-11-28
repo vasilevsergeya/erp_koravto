@@ -81,19 +81,27 @@ class MailMatchAcceptance(unittest.IsolatedAsyncioTestCase):
             ticket = listing.json()["match_ticket"]
             endpoint = "/api/mail/dialogs/customer-matches"
             checked = client.post(endpoint, json={"ticket": ticket})
-            self.assertEqual(checked.json(), {"matches": {email: "email"}, "pending": False})
+            self.assertEqual(
+                checked.json(), {"matches": {email: "email"}, "onec_emails": [], "pending": False}
+            )
             self.assertEqual(client.post(endpoint, json={"ticket": "forged"}).status_code, 400)
             gmail.dialog_page.assert_awaited_once_with("", "")
 
     async def test_exact_card_matches_queue_deduplication_and_card_edit(self):
         fingerprint, tag = uid(), uid()
-        direct, buyer, unknown, offline = [s + tag + "@example.test" for s in "abcd"]
+        direct, buyer, unknown, offline, no_phone, other_phone = [
+            s + tag + "@example.test" for s in "abcdef"
+        ]
         settings = (("http://onec.invalid", "user", "password"), fingerprint)
         phone = "+12025550123"
 
         async def lookup(email):
             if email == offline:
                 raise OneCError("unavailable")
+            if email in (direct, no_phone):
+                return [{"name": "Customer", "phones": []}]
+            if email == other_phone:
+                return [{"phones": ["+1 202 555 0199"]}]
             return [{"phones": ["+1 202 555 0123"]}] if email == buyer else []
 
         async with Redis.from_url(config().redis_url) as redis:
@@ -124,29 +132,53 @@ class MailMatchAcceptance(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(
                         mm.match_page(db, [direct.upper(), buyer])["matches"], {direct: "email"}
                     )
-                emails = [direct.upper(), buyer, unknown, offline, buyer.upper()]
+                emails = [
+                    direct.upper(),
+                    buyer,
+                    unknown,
+                    offline,
+                    buyer.upper(),
+                    no_phone,
+                    other_phone,
+                ]
                 for _ in range(2):
                     self.assertEqual(
-                        mm.match_page(db, emails), {"matches": {direct: "email"}, "pending": True}
+                        mm.match_page(db, emails),
+                        {"matches": {direct: "email"}, "onec_emails": [], "pending": True},
                     )
-                self.assertEqual(await redis.zcard(mm.QUEUE), 3)
+                self.assertEqual(await redis.zcard(mm.QUEUE), 6)
                 call.assert_not_awaited()
-                await asyncio.gather(*(mm.lookup_next(redis) for _ in range(3)))
-                self.assertEqual(call.await_count, 3)
+                await asyncio.gather(*(mm.lookup_next(redis) for _ in range(6)))
+                self.assertEqual(call.await_count, 6)
                 self.assertEqual(
                     mm.match_page(db, emails),
-                    {"matches": {direct: "email", buyer: "phone"}, "pending": False},
+                    {
+                        "matches": {direct: "email", buyer: "phone"},
+                        "onec_emails": [direct, buyer, no_phone, other_phone],
+                        "pending": False,
+                    },
                 )
                 self.assertEqual(await redis.zcard(mm.QUEUE), 0)
                 self.assertLessEqual(
                     await redis.ttl(mm.cache_key(fingerprint, offline)), mm.RETRY_TTL
                 )
+                self.assertGreater(
+                    await redis.ttl(mm.cache_key(fingerprint, no_phone)), mm.MISS_TTL
+                )
+                # An explicit lookup in the customer panel replaces an earlier miss immediately.
+                await mm.remember_email_lookup(fingerprint, unknown.upper(), [{"phones": []}])
+                self.assertIn(unknown, mm.match_page(db, emails)["onec_emails"])
+                await mm.remember_email_lookup(fingerprint, unknown, [], only_if_missing=True)
+                self.assertIn(unknown, mm.match_page(db, emails)["onec_emails"])
+                await mm.remember_email_lookup(fingerprint, unknown, [])
+                self.assertNotIn(unknown, mm.match_page(db, emails)["onec_emails"])
                 # A new card phone with the same suffix must not match a cached full number.
                 identity.value = "+13105550123"
                 db.flush()
                 self.assertEqual(mm.match_page(db, emails)["matches"], {direct: "email"})
-                self.assertEqual(call.await_count, 3)
+                self.assertEqual(call.await_count, 6)
                 with patch.object(mm, "connection_settings", return_value=(("", "", ""), "off")):
                     self.assertEqual(
-                        mm.match_page(db, emails), {"matches": {direct: "email"}, "pending": False}
+                        mm.match_page(db, emails),
+                        {"matches": {direct: "email"}, "onec_emails": [], "pending": False},
                     )
