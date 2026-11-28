@@ -31,6 +31,7 @@ from app.services.ai import queue_inbound, supersede
 from app.services.customer_avatars import refresh_avatars_loop, remember_avatar
 from app.services.customer_orders import refresh_links_loop
 from app.services.customers import attach_conversation, structure_lock
+from app.services.mail_matches import phone_lookup_loop
 from app.services.message_actions import process_action, recover_actions
 from app.services.onec_customers import refresh_customers_loop
 from app.services.outbox import deliver_message, status_forward
@@ -378,9 +379,15 @@ async def startup(ctx):
     ctx["link_task"] = asyncio.create_task(refresh_links_loop())
     ctx["avatar_task"] = asyncio.create_task(refresh_avatars_loop())
     ctx["onec_task"] = asyncio.create_task(refresh_customers_loop())
+    ctx["mail_phone_tasks"] = [
+        asyncio.create_task(phone_lookup_loop(ctx["redis"])) for _ in range(2)
+    ]
 
 
 async def shutdown(ctx):
+    for task in ctx["mail_phone_tasks"]:
+        task.cancel()
+    await asyncio.gather(*ctx["mail_phone_tasks"], return_exceptions=True)
     ctx["monitor_task"].cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await ctx["monitor_task"]

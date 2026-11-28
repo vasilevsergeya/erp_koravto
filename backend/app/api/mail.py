@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from itsdangerous import BadSignature
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.auth import current_user
@@ -11,6 +13,7 @@ from app.core.settings import direct_secret
 from app.integrations.gmail import THREAD_ID, GmailError, GmailMailbox, bearer, belongs_to, describe
 from app.integrations.gmail_imap import imap_credentials
 from app.integrations.onec import OneCAdapter, OneCError
+from app.services.mail_matches import match_page, page_signer
 from app.services.onec_customers import connection_settings
 
 router = APIRouter(prefix="/api/mail", tags=["mail"], dependencies=[Depends(current_user)])
@@ -73,7 +76,28 @@ async def dialogs(
     if not value:
         return {"mailbox": None, "dialogs": [], "next": None}
     async with mailbox(value) as gmail:
-        return await gmail.dialog_page(page, q)
+        result = await gmail.dialog_page(page, q)
+    if result["dialogs"]:
+        emails = sorted({row["email"].strip().lower() for row in result["dialogs"]})
+        result["match_ticket"] = page_signer(value).dumps(emails)
+    return result
+
+
+class MatchPage(BaseModel):
+    ticket: str = Field(min_length=1, max_length=1_000_000)
+
+
+@router.post("/dialogs/customer-matches")
+def dialog_customer_matches(
+    body: MatchPage, value: str = Depends(gmail_setting), db: Session = Depends(get_db)
+):
+    if not value:
+        raise HTTPException(409, "Почта Gmail ещё не подключена.")
+    try:
+        emails = page_signer(value).loads(body.ticket)
+    except BadSignature:
+        raise HTTPException(400, "Обновите список почтовых диалогов.") from None
+    return match_page(db, emails)
 
 
 @router.get("/dialogs/messages")

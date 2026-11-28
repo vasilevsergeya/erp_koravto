@@ -46,6 +46,7 @@ const { chromium } = require("playwright");
       threadId: "abc",
     };
     const lookups = [];
+    let matchChecks = 0;
     const profile = {
       name: "Alex Morgan",
       FirstName: "Alex",
@@ -93,14 +94,28 @@ const { chromium } = require("playwright");
         json = url.searchParams.get("page")
           ? {
               mailbox: box,
+              match_ticket: "page2",
               dialogs: [
                 { ...row, at: letters[0].at },
                 { ...row, email: second, name: "", at: 1 },
               ],
               next: null,
             }
-          : { mailbox: box, dialogs: [row], next: "p2" };
-      else if (p === "/api/mail/dialogs/messages")
+          : { mailbox: box, match_ticket: "page1", dialogs: [row], next: "p2" };
+      else if (p === "/api/mail/dialogs/customer-matches") {
+        assert.equal(route.request().method(), "POST");
+        const ticket = route.request().postDataJSON().ticket;
+        if (ticket === "page1") {
+          matchChecks++;
+          json = {
+            matches: matchChecks > 1 ? { [buyer]: "phone" } : {},
+            pending: matchChecks === 1,
+          };
+        } else {
+          assert.equal(ticket, "page2");
+          json = { matches: { [second]: "email" }, pending: false };
+        }
+      } else if (p === "/api/mail/dialogs/messages")
         json =
           url.searchParams.get("email") === second
             ? { messages: [], next: null }
@@ -185,7 +200,11 @@ const { chromium } = require("playwright");
       incoming.x > outgoing.x + 30 &&
         incoming.x + incoming.width > outgoing.x + outgoing.width,
     );
+    await page
+      .getByText("Клиент ERP · телефон из 1С", { exact: true })
+      .waitFor();
     await page.getByRole("button", { name: "Загрузить ещё" }).click();
+    await page.getByText("Клиент ERP · email", { exact: true }).waitFor();
     await page.getByRole("button", { name: new RegExp(second) }).click();
     await page.getByText("Писем с этим адресом больше нет.").waitFor();
     await page.locator(".crm-onec-candidates summary").click();

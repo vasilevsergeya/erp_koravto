@@ -1,5 +1,10 @@
 import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   ArrowLeft,
   BookOpen,
@@ -10,6 +15,7 @@ import {
   RefreshCw,
   Search,
   UserRound,
+  UserRoundCheck,
 } from "lucide-react";
 import { api } from "./api";
 import { clockTime, dayKey, dayLabel, shortTime } from "./dialog-time";
@@ -45,6 +51,7 @@ type HistoryPage = { messages: Letter[]; next: string | null };
 type MailPage = {
   mailbox: string | null;
   dialogs: Summary[];
+  match_ticket?: string;
   next: string | null;
 };
 const display = (c?: Contact | null) =>
@@ -153,6 +160,33 @@ export function MailPage({
     getNextPageParam: (last) => last.next ?? undefined,
   });
   const mailbox = pages.data?.pages[0].mailbox;
+  const queryClient = useQueryClient();
+  const tickets = [
+    ...new Set(
+      (pages.data?.pages ?? []).flatMap((p) =>
+        p.match_ticket ? [p.match_ticket] : [],
+      ),
+    ),
+  ];
+  const matchPages = useQueries({
+    queries: tickets.map((ticket) => ({
+      queryKey: ["mail", "customer-matches", mailbox, ticket],
+      queryFn: () =>
+        api<{
+          matches: Record<string, "email" | "phone">;
+          pending: boolean;
+        }>("/api/mail/dialogs/customer-matches", "POST", { ticket }),
+      refetchInterval: (query: { state: { data?: { pending: boolean } } }) =>
+        query.state.data?.pending ? 3_000 : 60_000,
+      staleTime: 2_000,
+      gcTime: 0,
+      retry: false,
+    })),
+  });
+  const matches = new Map<string, "email" | "phone">();
+  for (const page of matchPages)
+    for (const [email, reason] of Object.entries(page.data?.matches ?? {}))
+      if (reason === "email" || !matches.has(email)) matches.set(email, reason);
   const byEmail = new Map<string, Summary>();
   for (const page of pages.data?.pages ?? [])
     for (const row of page.dialogs) {
@@ -206,6 +240,9 @@ export function MailPage({
   }
   function refresh() {
     void pages.refetch();
+    void queryClient.invalidateQueries({
+      queryKey: ["mail", "customer-matches"],
+    });
     if (active) void history.refetch();
   }
   return (
@@ -291,6 +328,14 @@ export function MailPage({
                   </span>
                   {row.name && (
                     <span className="mail-row-address">{row.email}</span>
+                  )}
+                  {matches.has(row.email.toLowerCase()) && (
+                    <span className="mail-customer-match">
+                      <UserRoundCheck size={13} aria-hidden="true" />
+                      {matches.get(row.email.toLowerCase()) === "email"
+                        ? "Клиент ERP · email"
+                        : "Клиент ERP · телефон из 1С"}
+                    </span>
                   )}
                   <strong>
                     {row.unread && <i aria-label="Непрочитанное" />}
