@@ -15,7 +15,7 @@ from app.core.config import config
 from app.core.db import SessionLocal
 from app.core.settings import redis_client
 from app.integrations.onec import OneCAdapter, OneCError, exact_phone
-from app.models import Customer, CustomerIdentity
+from app.models import Conversation, Customer, CustomerIdentity, Message
 from app.services.onec_customers import connection_settings
 
 QUEUE = "crm:mail:email-lookups:v2"
@@ -47,11 +47,30 @@ def returned_phones(clients):
     return sorted(phones)
 
 
-def card_values(db, kind, values):
+def card_contacts(db, kind, values) -> dict[str, bool]:
+    """Map matching contact values to whether their card has WhatsApp correspondence."""
     if not values:
-        return set()
+        return {}
+    has_message = (
+        select(Message.id)
+        .where(
+            Message.conversation_id == Conversation.id,
+            Message.direction.in_(("in", "out")),
+            ~Message.is_private_note,
+        )
+        .exists()
+    )
+    has_whatsapp = (
+        select(Conversation.id)
+        .where(
+            Conversation.customer_id == CustomerIdentity.customer_id,
+            Conversation.chat_type == "whatsapp",
+            has_message,
+        )
+        .exists()
+    )
     query = (
-        select(CustomerIdentity.value)
+        select(CustomerIdentity.value, has_whatsapp)
         .join(Customer, Customer.id == CustomerIdentity.customer_id)
         .where(
             Customer.merged_into_id.is_(None),
@@ -61,13 +80,14 @@ def card_values(db, kind, values):
     )
     if kind == "email":
         query = query.where(CustomerIdentity.verified)
-    return set(db.scalars(query))
+    return {value: has_chat for value, has_chat in db.execute(query)}
 
 
 def match_page(db, emails):
     emails = list(dict.fromkeys(email.strip().lower() for email in emails))
-    direct = card_values(db, "email", emails)
+    direct = card_contacts(db, "email", emails)
     matches = dict.fromkeys(direct, "email")
+    whatsapp_emails = {email for email, has_chat in direct.items() if has_chat}
     onec_emails: list[str] = []
     pending = False
     if emails:
@@ -96,13 +116,20 @@ def match_page(db, emails):
                         pipe.execute()
                     pending = True
                 phones = {phone for numbers in phones_by_email.values() for phone in numbers}
-                known = card_values(db, "phone", phones)
+                known = card_contacts(db, "phone", phones)
                 for email, numbers in phones_by_email.items():
-                    if not known.isdisjoint(numbers):
+                    if any(number in known for number in numbers):
                         matches[email] = "phone"
+                    if any(known.get(number) for number in numbers):
+                        whatsapp_emails.add(email)
             except RedisError:
                 pass  # Local email matches remain available; the next poll retries.
-    return {"matches": matches, "onec_emails": onec_emails, "pending": pending}
+    return {
+        "matches": matches,
+        "onec_emails": onec_emails,
+        "whatsapp_emails": sorted(whatsapp_emails),
+        "pending": pending,
+    }
 
 
 async def remember_email_lookup(fingerprint, email, clients, *, only_if_missing=False):

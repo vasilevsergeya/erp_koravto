@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Inbox,
   Mail,
+  MessageCircle,
   Paperclip,
   RefreshCw,
   Search,
@@ -182,6 +183,7 @@ export function MailPage({
         api<{
           matches: Record<string, "email" | "phone">;
           onec_emails?: string[];
+          whatsapp_emails?: string[];
           pending: boolean;
         }>("/api/mail/dialogs/customer-matches", "POST", { ticket }),
       refetchInterval: (query: { state: { data?: { pending: boolean } } }) =>
@@ -191,12 +193,14 @@ export function MailPage({
       retry: false,
     })),
   });
-  const matches = new Map<string, "email" | "phone">();
-  for (const page of matchPages)
-    for (const [email, reason] of Object.entries(page.data?.matches ?? {}))
-      if (reason === "email" || !matches.has(email)) matches.set(email, reason);
-  const onecEmails = new Set(
-    matchPages.flatMap((page) => page.data?.onec_emails ?? []),
+  const customerEmails = new Set(
+    matchPages.flatMap(({ data }) => [
+      ...Object.keys(data?.matches ?? {}),
+      ...(data?.onec_emails ?? []),
+    ]),
+  );
+  const whatsappEmails = new Set(
+    matchPages.flatMap(({ data }) => data?.whatsapp_emails ?? []),
   );
   const byEmail = new Map<string, Summary>();
   for (const page of pages.data?.pages ?? [])
@@ -340,18 +344,16 @@ export function MailPage({
                   {row.name && (
                     <span className="mail-row-address">{row.email}</span>
                   )}
-                  {matches.has(row.email.toLowerCase()) && (
+                  {customerEmails.has(row.email.toLowerCase()) && (
                     <span className="mail-customer-match">
                       <UserRoundCheck size={13} aria-hidden="true" />
-                      {matches.get(row.email.toLowerCase()) === "email"
-                        ? "Клиент ERP · email"
-                        : "Клиент ERP · телефон из 1С"}
+                      Клиент 1С
                     </span>
                   )}
-                  {onecEmails.has(row.email.toLowerCase()) && (
-                    <span className="mail-customer-match">
-                      <UserRoundCheck size={13} aria-hidden="true" />
-                      Клиент ERP · email из 1С
+                  {whatsappEmails.has(row.email.toLowerCase()) && (
+                    <span className="mail-whatsapp-match">
+                      <MessageCircle size={13} aria-hidden="true" />
+                      Диалог в WhatsApp
                     </span>
                   )}
                   <strong>

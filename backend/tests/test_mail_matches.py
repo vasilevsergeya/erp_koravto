@@ -16,7 +16,7 @@ from app.core.db import SessionLocal, get_db
 from app.core.settings import redis_client
 from app.integrations.onec import OneCError
 from app.main import app
-from app.models import Customer, CustomerIdentity, uid
+from app.models import Conversation, Customer, CustomerIdentity, Message, uid
 from app.services import mail_matches as mm
 
 
@@ -39,6 +39,64 @@ class MailMatchTests(unittest.TestCase):
     os.getenv("CRM_INTEGRATION_TEST") == "1", "Needs isolated PostgreSQL and Redis"
 )
 class MailMatchAcceptance(unittest.IsolatedAsyncioTestCase):
+    async def test_whatsapp_badge_uses_only_correspondence_on_the_matching_card(self):
+        direct, by_phone, different_card = [f"{uid()}@example.test" for _ in range(3)]
+        phone = "+12025550123"
+        fingerprint = uid()
+        with (
+            SessionLocal() as db,
+            patch.object(mm, "connection_settings", return_value=(("url", "u", "p"), fingerprint)),
+        ):
+            card, other = Customer(), Customer()
+            db.add_all([card, other])
+            db.flush()
+            db.add_all(
+                [
+                    CustomerIdentity(
+                        customer_id=card.id, type="email", value=direct, verified=True
+                    ),
+                    CustomerIdentity(customer_id=card.id, type="phone", value=phone),
+                    CustomerIdentity(
+                        customer_id=other.id, type="email", value=different_card, verified=True
+                    ),
+                ]
+            )
+            for email in (direct, by_phone, different_card):
+                await mm.remember_email_lookup(fingerprint, email, [{"phones": [phone]}])
+            whatsapp, telegram = [
+                Conversation(customer_id=card.id, channel_id=kind, chat_id=uid(), chat_type=kind)
+                for kind in ("whatsapp", "telegram")
+            ]
+            db.add_all([whatsapp, telegram])
+            db.flush()
+
+            def message(chat, direction, private=False):
+                return Message(
+                    conversation_id=chat.id,
+                    channel_id=chat.channel_id,
+                    external_id=uid(),
+                    direction=direction,
+                    author_type="user",
+                    is_private_note=private,
+                )
+
+            db.add_all([message(telegram, "in"), message(whatsapp, "system", private=True)])
+            db.flush()
+            emails = [direct, by_phone, different_card]
+            self.assertEqual(mm.match_page(db, emails)["whatsapp_emails"], [])
+            whatsapp.state = "closed"
+            db.add(message(whatsapp, "out"))
+            db.flush()
+            result = mm.match_page(db, emails)
+            self.assertEqual(
+                result["matches"], {direct: "email", different_card: "email", by_phone: "phone"}
+            )
+            self.assertCountEqual(result["whatsapp_emails"], [direct, by_phone])
+            # A confirmed email belongs to its own card even when 1C returns another card's phone.
+            self.assertNotIn(different_card, result["whatsapp_emails"])
+            with patch.object(redis_client, "mget", side_effect=ConnectionError()):
+                self.assertEqual(mm.match_page(db, emails)["whatsapp_emails"], [direct])
+
     async def test_dialog_list_issues_ticket_and_status_uses_only_card(self):
         email = uid() + "@example.test"
         box = "sales@example.test"
@@ -82,7 +140,13 @@ class MailMatchAcceptance(unittest.IsolatedAsyncioTestCase):
             endpoint = "/api/mail/dialogs/customer-matches"
             checked = client.post(endpoint, json={"ticket": ticket})
             self.assertEqual(
-                checked.json(), {"matches": {email: "email"}, "onec_emails": [], "pending": False}
+                checked.json(),
+                {
+                    "matches": {email: "email"},
+                    "onec_emails": [],
+                    "whatsapp_emails": [],
+                    "pending": False,
+                },
             )
             self.assertEqual(client.post(endpoint, json={"ticket": "forged"}).status_code, 400)
             gmail.dialog_page.assert_awaited_once_with("", "")
@@ -144,7 +208,12 @@ class MailMatchAcceptance(unittest.IsolatedAsyncioTestCase):
                 for _ in range(2):
                     self.assertEqual(
                         mm.match_page(db, emails),
-                        {"matches": {direct: "email"}, "onec_emails": [], "pending": True},
+                        {
+                            "matches": {direct: "email"},
+                            "onec_emails": [],
+                            "whatsapp_emails": [],
+                            "pending": True,
+                        },
                     )
                 self.assertEqual(await redis.zcard(mm.QUEUE), 6)
                 call.assert_not_awaited()
@@ -155,6 +224,7 @@ class MailMatchAcceptance(unittest.IsolatedAsyncioTestCase):
                     {
                         "matches": {direct: "email", buyer: "phone"},
                         "onec_emails": [direct, buyer, no_phone, other_phone],
+                        "whatsapp_emails": [],
                         "pending": False,
                     },
                 )
@@ -180,5 +250,10 @@ class MailMatchAcceptance(unittest.IsolatedAsyncioTestCase):
                 with patch.object(mm, "connection_settings", return_value=(("", "", ""), "off")):
                     self.assertEqual(
                         mm.match_page(db, emails),
-                        {"matches": {direct: "email"}, "onec_emails": [], "pending": False},
+                        {
+                            "matches": {direct: "email"},
+                            "onec_emails": [],
+                            "whatsapp_emails": [],
+                            "pending": False,
+                        },
                     )

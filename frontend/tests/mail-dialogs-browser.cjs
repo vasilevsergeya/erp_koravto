@@ -112,6 +112,7 @@ const { chromium } = require("playwright");
           json = {
             matches: matchChecks > 1 ? { [buyer]: "phone" } : {},
             onec_emails: matchChecks > 1 ? [buyer] : [],
+            whatsapp_emails: matchChecks > 1 ? [buyer] : [],
             pending: matchChecks === 1,
           };
         } else {
@@ -119,6 +120,7 @@ const { chromium } = require("playwright");
           json = {
             matches: { [second]: "email" },
             onec_emails: [onecOnly],
+            whatsapp_emails: [],
             pending: false,
           };
         }
@@ -207,28 +209,24 @@ const { chromium } = require("playwright");
       outgoing.x > incoming.x + 30 &&
         outgoing.x + outgoing.width > incoming.x + incoming.width,
     );
-    await page
-      .getByText("Клиент ERP · телефон из 1С", { exact: true })
-      .waitFor();
-    const onecLabel = "Клиент ERP · email из 1С";
-    await page
-      .locator(".mail-row")
-      .filter({ hasText: buyer })
-      .getByText(onecLabel, { exact: true })
-      .waitFor();
+    const onecLabel = "Клиент 1С";
+    const whatsappLabel = "Диалог в WhatsApp";
+    const buyerRow = page.locator(".mail-row").filter({ hasText: buyer });
+    await buyerRow.getByText(whatsappLabel, { exact: true }).waitFor();
+    assert.equal(
+      await buyerRow.getByText(onecLabel, { exact: true }).count(),
+      1,
+    );
     await page.getByRole("button", { name: "Загрузить ещё" }).click();
     const onlyIn1c = page.locator(".mail-row").filter({ hasText: onecOnly });
     await onlyIn1c.getByText(onecLabel, { exact: true }).waitFor();
     assert.equal(await onlyIn1c.locator(".mail-customer-match").count(), 1);
+    const emailOnly = page.locator(".mail-row").filter({ hasText: second });
+    await emailOnly.getByText(onecLabel, { exact: true }).waitFor();
     assert.equal(
-      await page
-        .locator(".mail-row")
-        .filter({ hasText: second })
-        .getByText(onecLabel, { exact: true })
-        .count(),
-      0,
+      await page.getByText(whatsappLabel, { exact: true }).count(),
+      1,
     );
-    await page.getByText("Клиент ERP · email", { exact: true }).waitFor();
     await page.getByRole("button", { name: new RegExp(second) }).click();
     await page.getByText("Писем с этим адресом больше нет.").waitFor();
     await page.locator(".crm-onec-candidates summary").click();

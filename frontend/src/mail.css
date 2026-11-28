@@ -383,7 +383,8 @@
   }
 }
 
-.mail-customer-match {
+.mail-customer-match,
+.mail-whatsapp-match {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -396,6 +397,8 @@
   font-weight: 600;
 }
 
-.mail-customer-match + .mail-customer-match {
+.mail-whatsapp-match {
+  background: #e2ecf8;
+  color: #254d78;
   margin-inline-start: 4px;
 }
