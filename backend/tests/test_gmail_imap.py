@@ -53,7 +53,12 @@ class GmailImapTests(unittest.IsolatedAsyncioTestCase):
                 return {n: rows[n] for n in ids}
             self.assertIn(fields[0], ["BODY.PEEK[1]<0.1024>", "BODY.PEEK[1]"])
             key = b"BODY[1]<0>" if "<0." in fields[0] else b"BODY[1]"
-            return {n: {key: base64.b64encode("Письмо".encode())} for n in ids}
+            return {
+                n: {
+                    key: base64.b64encode("Письмо\n\n> Предыдущее письмо\n>> Другой ответ".encode())
+                }
+                for n in ids
+            }
 
         with patch("app.integrations.gmail_imap.IMAPClient") as ctor:
             fake = ctor.return_value.__enter__.return_value

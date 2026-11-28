@@ -12,10 +12,11 @@ from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import getaddresses
 from html import unescape
-from html.parser import HTMLParser
 from urllib.parse import quote
 
 import httpx
+
+from app.integrations.mail_text import gmail_snippet, visible_mail_text
 
 BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 REFRESH_URL = "https://oauth2.googleapis.com/token"
@@ -65,36 +66,6 @@ async def bearer(client: httpx.AsyncClient, value: str) -> str:
         return token
 
 
-class PlainHTML(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.text: list[str] = []
-        self.hidden = 0
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ("head", "script", "style"):
-            self.hidden += 1
-        if not self.hidden and tag in ("p", "br", "div", "li", "tr"):
-            self.text.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in ("head", "script", "style") and self.hidden:
-            self.hidden -= 1
-        if not self.hidden and tag in ("p", "div", "li", "tr"):
-            self.text.append("\n")
-
-    def handle_data(self, data):
-        if not self.hidden:
-            self.text.append(data)
-
-
-def html_to_text(body):
-    parser = PlainHTML()
-    parser.feed(body)
-    parser.close()
-    return re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", "".join(parser.text))
-
-
 def decoded_header(value):
     try:
         return str(make_header(decode_header(value)))
@@ -114,11 +85,11 @@ def header_values(part, key):
     return [h["value"] for h in part.get("headers", []) if h["name"].lower() == key.lower()]
 
 
-def message_body(part, attachments):
+def message_body(part, attachments) -> str | None:
     filename = part.get("filename")
     if filename:
         attachments.append(filename)
-        return ""
+        return None
     kind = part.get("mimeType", "").lower()
     if kind.startswith("multipart/"):
         children = part.get("parts", [])
@@ -126,26 +97,27 @@ def message_body(part, attachments):
             children = sorted(children, key=lambda p: p.get("mimeType") != "text/plain")
             for child in children:
                 body = message_body(child, attachments)
-                if body:
+                if body is not None:
                     return body
-            return ""
-        return "\n\n".join(filter(None, (message_body(p, attachments) for p in children)))
+            return None
+        parts = [message_body(p, attachments) for p in children]
+        if all(part is None for part in parts):
+            return None
+        return "\n\n".join(filter(None, parts))
     if kind not in ("text/plain", "text/html"):
-        return ""
+        return None
     data = part.get("body", {}).get("data", "")
     content_type = Message()
     content_type["Content-Type"] = next(iter(header_values(part, "Content-Type")), kind)
     try:
         raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
     except (ValueError, binascii.Error):
-        return ""
+        return None
     try:
         body = raw.decode(content_type.get_content_charset() or "utf-8", errors="replace")
     except LookupError:
         body = raw.decode(errors="replace")
-    if kind == "text/html":
-        body = html_to_text(body)
-    return body.strip()
+    return visible_mail_text(body, html=kind == "text/html") if body.strip() else None
 
 
 def describe(thread, mailbox, *, full=False):
@@ -180,11 +152,12 @@ def describe(thread, mailbox, *, full=False):
             "unread": "UNREAD" in labels,
             "at": int(item["internalDate"]),
             "subject": decoded_header(next(iter(header_values(part, "Subject")), "")),
-            "snippet": unescape(item.get("snippet", "")),
+            "snippet": gmail_snippet(unescape(item.get("snippet", ""))),
         }
         if full:
             names: list[str] = []
-            msg["text"] = message_body(part, names) or msg["snippet"]
+            msg["text"] = message_body(part, names) or ""
+            msg["snippet"] = " ".join(msg["text"][:500].split())[:180]
             msg["attachments"] = names
         messages.append(msg)
     if not messages:
@@ -294,7 +267,9 @@ class GmailMailbox:
                     raise
             result = describe(thread, mailbox)
             if result:
-                result["snippet"] = result["snippet"] or unescape(item.get("snippet", ""))
+                result["snippet"] = result["snippet"] or gmail_snippet(
+                    unescape(item.get("snippet", ""))
+                )
                 if history:
                     _METADATA[key] = result
                     if len(_METADATA) > 512:

@@ -17,6 +17,7 @@ from app.core.db import SessionLocal
 from app.core.security import token_hash
 from app.core.settings import invalidate_settings
 from app.integrations.gmail import REFRESH_URL, GmailMailbox, bearer, describe
+from app.integrations.mail_text import visible_mail_text
 from app.main import app
 from app.models import Conversation, LoginSession, Setting, User, now, uid
 
@@ -83,6 +84,69 @@ class GmailContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["messages"][1]["attachments"], ["order.pdf"])
         self.assertEqual(result["contacts"], [{"email": EMAIL, "name": ""}])
         self.assertTrue(result["unread"])
+
+    def test_keep_only_authored_paragraphs_and_inline_answers(self):
+        for raw, expected in [
+            (
+                "Price > 100 USD.\r\nOn Sat, 28 Nov,\r\nAlex <a@example.test> wrote:\r\n"
+                " > First?\r\nYes.\r\n >> Nested question\r\nTwo pieces.",
+                "Price > 100 USD.\n\nYes.\n\nTwo pieces.",
+            ),
+            ("Ответ.\n\n28.11.2026 Анна <a@example.test> написала:\n> Текст", "Ответ."),
+            ("Ответ.\nсб, 28 нояб. 2026 г.,\nАнна <a@example.test>:\n> Текст", "Ответ."),
+            ("-----Original Message-----\n> Old question\nMy answer below.", "My answer below."),
+            (
+                "My reply\n__________\nFrom: Customer\nSent: Saturday\nTo: Buyer\n"
+                "Subject: Request\nOld message without prefixes",
+                "My reply",
+            ),
+            (
+                "From: Seoul\nTo: Sydney\nSubject: Test shipment",
+                "From: Seoul\nTo: Sydney\nSubject: Test shipment",
+            ),
+            (">> Nested history only", ""),
+        ]:
+            with self.subTest(raw=raw):
+                self.assertEqual(visible_mail_text(raw), expected)
+
+    def test_gmail_metadata_preview_does_not_repeat_a_flattened_reply(self):
+        letter = message("1", 100, EMAIL, BOX, ["INBOX"], "OK")
+        letter["snippet"] = "Price &gt; 10. On Sat, 28 Nov, Alex wrote: &gt; Old message"
+        row = describe({"id": "test", "messages": [letter]}, BOX)
+        self.assertEqual(row["snippet"], "Price > 10.")
+
+    def test_html_quote_containers_and_text_after_them(self):
+        raw = (
+            "<head><style>.unused{}</style></head><p>Answer &amp; price</p>"
+            "<div class='gmail_quote'><div class='gmail_attr'>On Saturday:</div>"
+            "<blockquote><div>Old reply</div></blockquote></div>"
+            "<p>Deliver Monday.</p><div class='moz-cite-prefix'>Someone wrote:</div>"
+            "<blockquote type='cite'><blockquote>Older</blockquote>Old</blockquote>"
+            "<div>&gt; another quote<br>One more answer.</div>"
+        )
+        self.assertEqual(
+            visible_mail_text(raw, html=True),
+            "Answer & price\n\nDeliver Monday.\n\nOne more answer.",
+        )
+
+    def test_quote_only_plain_does_not_return_html_history_or_gmail_snippet(self):
+        letter = message("1", 100, EMAIL, BOX, ["INBOX"], "> old message")
+        plain = letter["payload"].copy()
+        html = message("1", 100, EMAIL, BOX, ["INBOX"], "<p>old message</p>", "text/html")[
+            "payload"
+        ]
+        letter["payload"].update(
+            mimeType="multipart/mixed",
+            parts=[
+                {"mimeType": "multipart/alternative", "parts": [html, plain]},
+                {"filename": "quote.pdf", "mimeType": "application/pdf"},
+            ],
+        )
+        letter["snippet"] = "old message from Gmail"
+        result = describe({"id": "test", "messages": [letter]}, BOX, full=True)["messages"][0]
+        self.assertEqual(result["text"], "")
+        self.assertEqual(result["snippet"], "")
+        self.assertEqual(result["attachments"], ["quote.pdf"])
 
     async def test_address_dialogs_across_topics_and_recipients(self):
         other = "second@example.test"

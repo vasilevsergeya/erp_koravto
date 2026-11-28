@@ -24,8 +24,8 @@ from app.integrations.gmail import (
     decoded_header,
     describe,
     dialog_rows,
-    html_to_text,
 )
+from app.integrations.mail_text import visible_mail_text
 
 _POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gmail-imap")
 HEADERS = "HEADER.FIELDS (FROM TO CC BCC SUBJECT)"
@@ -161,7 +161,7 @@ def decode_text(raw, subtype, charset, encoding):
         text = raw.decode(charset.decode("ascii"), "replace")
     except (LookupError, UnicodeError):
         text = raw.decode("utf-8", "replace")
-    return (html_to_text(text) if subtype == b"HTML" else text).strip()
+    return visible_mail_text(text, html=subtype == b"HTML")
 
 
 def thread_rows(client, thread_id, fields):
