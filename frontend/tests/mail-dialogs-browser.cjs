@@ -197,8 +197,8 @@ const { chromium } = require("playwright");
     const incoming = await cards.nth(1).boundingBox(),
       outgoing = await cards.nth(2).boundingBox();
     assert.ok(
-      incoming.x > outgoing.x + 30 &&
-        incoming.x + incoming.width > outgoing.x + outgoing.width,
+      outgoing.x > incoming.x + 30 &&
+        outgoing.x + outgoing.width > incoming.x + incoming.width,
     );
     await page
       .getByText("Клиент ERP · телефон из 1С", { exact: true })

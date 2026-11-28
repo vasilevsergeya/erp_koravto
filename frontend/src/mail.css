@@ -229,7 +229,7 @@
   width: fit-content;
   max-width: 86%;
   min-width: min(210px, 80%);
-  margin: 9px 0 9px auto;
+  margin: 9px auto 9px 0;
   padding: 12px 14px;
   border: 1px solid #dce6e0;
   border-radius: 9px;
@@ -237,8 +237,8 @@
   overflow-wrap: anywhere;
 }
 .mail-letter.outgoing {
-  margin-left: 0;
-  margin-right: auto;
+  margin-left: auto;
+  margin-right: 0;
   background: #ecf6f0;
   border-color: #cde4d6;
 }
