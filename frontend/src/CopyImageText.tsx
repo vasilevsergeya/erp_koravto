@@ -1,6 +1,8 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Copy } from "lucide-react";
 
+type OcrResult = { text: string; uncertain: boolean };
+
 function recognize(
   image: HTMLImageElement,
   angle: number,
@@ -31,7 +33,7 @@ function recognize(
   });
   let onAbort: () => void;
   let timeout: number;
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<OcrResult>((resolve, reject) => {
     onAbort = () => reject(new DOMException("Cancelled", "AbortError"));
     signal.addEventListener("abort", onAbort, { once: true });
     timeout = window.setTimeout(
@@ -40,7 +42,8 @@ function recognize(
     );
     worker.onerror = () => reject(new Error("OCR failed"));
     worker.onmessage = ({ data }) => {
-      if (typeof data.text === "string") resolve(data.text);
+      if (typeof data.text === "string")
+        resolve({ text: data.text, uncertain: data.uncertain === true });
       else reject(new Error("OCR failed"));
     };
     canvas.toBlob((blob) => {
@@ -67,7 +70,7 @@ export function CopyImageText({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [manual, setManual] = useState(false);
-  const cached = useRef("");
+  const cached = useRef<OcrResult | null>(null);
   const pending = useRef<AbortController | null>(null);
   useLayoutEffect(() => () => pending.current?.abort(), []);
 
@@ -86,7 +89,7 @@ export function CopyImageText({
       // Start the clipboard operation inside the click handler, also on Safari.
       let writing: Promise<boolean> | undefined;
       if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        const blob = result.then((text) => {
+        const blob = result.then(({ text }) => {
           if (!text || signal.aborted) throw new Error("No text to copy");
           return new Blob([text], { type: "text/plain" });
         });
@@ -103,13 +106,14 @@ export function CopyImageText({
           /* Fall back to writing plain text below. */
         }
       }
-      const text = await result;
+      const recognized = await result;
+      const { text } = recognized;
       if (signal.aborted) return;
       if (!text) {
         setNotice("На изображении не найден текст.");
         return;
       }
-      cached.current = text;
+      cached.current = recognized;
       if (!(await writing)) {
         if (signal.aborted) return;
         try {
@@ -124,7 +128,12 @@ export function CopyImageText({
           return;
         }
       }
-      if (!signal.aborted) setNotice("Текст скопирован");
+      if (!signal.aborted)
+        setNotice(
+          recognized.uncertain
+            ? "Текст скопирован. Сверьте распознанные символы с фото."
+            : "Текст скопирован",
+        );
     } catch {
       if (!signal.aborted)
         setNotice("Не удалось распознать текст. Попробуйте ещё раз.");
@@ -153,7 +162,7 @@ export function CopyImageText({
           className="gallery-ocr-result"
           aria-label="Распознанный текст"
           readOnly
-          value={cached.current}
+          value={cached.current?.text ?? ""}
           onFocus={(event) => event.currentTarget.select()}
         />
       )}

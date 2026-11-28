@@ -106,7 +106,19 @@ const { chromium } = require("playwright"),
     ctx.font = "56px Arial, sans-serif";
     ctx.fillText("Артикул 12345", 80, 180);
     ctx.fillText("PART 67890", 80, 290);
-    return [blank, canvas.toDataURL("image/png")];
+    const sideways = document.createElement("canvas");
+    sideways.width = canvas.height;
+    sideways.height = canvas.width;
+    const side = sideways.getContext("2d");
+    side.translate(0, sideways.height);
+    side.rotate(-Math.PI / 2);
+    side.filter = "invert(1)";
+    side.drawImage(canvas, 0, 0);
+    return [
+      blank,
+      canvas.toDataURL("image/png"),
+      sideways.toDataURL("image/png"),
+    ];
   });
   const photos = ["archive", "recent"].map((id, index) => ({
     id,
@@ -233,6 +245,7 @@ const { chromium } = require("playwright"),
   const thumbnail = page.getByRole("button", { name: "recent.png" });
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   for (const width of [1366, 390]) {
+    if (width === 390) photos[1].url = photoUrls[2];
     await page.setViewportSize({ width, height: 768 });
     await thumbnail.click();
     await viewer.getByText("2 / 2").waitFor();
